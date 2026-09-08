@@ -343,16 +343,27 @@ class ControlResponseState:
         self.initial_sync_generation: int | None = None
         self.inputs_since_sync = 0
         self.response_due: int | None = None
+        self.statistics_enabled = False
         self.control_unresponsive = False
         self.reconnect_suggested = False
 
     def note_input(self) -> None:
         if self.hidden or self.tunnel_state != "open":
             return
+        if not self.inputs_since_sync:
+            self.statistics_enabled = True
         self.inputs_since_sync += 1
         if self.response_due is None:
             self.initial_sync_generation = self.sync_generation
             self.response_due = self.now + self.RESPONSE_TIMEOUT
+
+    def set_hidden(self, hidden: bool) -> None:
+        self.hidden = hidden
+        if hidden:
+            self.inputs_since_sync = 0
+            self.response_due = None
+            self.initial_sync_generation = None
+            self.statistics_enabled = False
 
     def sync(self, display_delay: int = 0, processing_lag: int = 0) -> None:
         if (
@@ -364,6 +375,7 @@ class ControlResponseState:
         self.inputs_since_sync = 0
         self.response_due = None
         self.initial_sync_generation = None
+        self.statistics_enabled = False
         if self.control_unresponsive:
             self.control_unresponsive = False
             self.reconnect_suggested = False
@@ -373,6 +385,7 @@ class ControlResponseState:
         if self.response_due is None or self.now < self.response_due:
             return
         self.response_due = None
+        self.statistics_enabled = False
         if (
             self.inputs_since_sync >= self.MIN_INPUTS
             and self.sync_generation == self.initial_sync_generation
@@ -382,6 +395,22 @@ class ControlResponseState:
             self.control_unresponsive = True
             self.reconnect_suggested = True
         self.inputs_since_sync = 0
+
+
+class ThumbnailUpdateState:
+    """Model thumbnails outside the latency-sensitive display sync path."""
+
+    def __init__(self) -> None:
+        self.updates: list[str] = []
+
+    def connected(self) -> None:
+        self.updates.append("connected")
+
+    def sync(self) -> None:
+        pass
+
+    def disconnected(self) -> None:
+        self.updates.append("disconnected")
 
 
 def main() -> None:
@@ -648,6 +677,7 @@ def main() -> None:
     for _ in range(ControlResponseState.MIN_INPUTS):
         responsive_input.note_input()
     responsive_input.sync()
+    assert responsive_input.statistics_enabled is False
     responsive_input.advance(ControlResponseState.RESPONSE_TIMEOUT)
     assert responsive_input.reconnect_suggested is False
 
@@ -657,8 +687,10 @@ def main() -> None:
     for _ in range(ControlResponseState.MIN_INPUTS):
         delayed_display.note_input()
     delayed_display.sync(display_delay=ControlResponseState.MAX_DISPLAY_DELAY + 1)
+    assert delayed_display.statistics_enabled is True
     delayed_display.advance(ControlResponseState.RESPONSE_TIMEOUT)
     assert delayed_display.reconnect_suggested is True
+    assert delayed_display.statistics_enabled is False
 
     delayed_render = ControlResponseState()
     for _ in range(ControlResponseState.MIN_INPUTS):
@@ -680,6 +712,23 @@ def main() -> None:
         hidden_input.note_input()
     hidden_input.advance(ControlResponseState.RESPONSE_TIMEOUT)
     assert hidden_input.reconnect_suggested is False
+    assert hidden_input.statistics_enabled is False
+
+    background_input = ControlResponseState()
+    background_input.note_input()
+    assert background_input.statistics_enabled is True
+    background_input.set_hidden(True)
+    assert background_input.response_due is None
+    assert background_input.statistics_enabled is False
+
+    # Live sync processing must never perform full-canvas thumbnail work. The
+    # first useful frame and final disconnected state still provide previews.
+    thumbnails = ThumbnailUpdateState()
+    thumbnails.connected()
+    for _ in range(1000):
+        thumbnails.sync()
+    thumbnails.disconnected()
+    assert thumbnails.updates == ["connected", "disconnected"]
 
     # A confirmed disruption that recovers queues one bounded reconnect after
     # the initial stable delay.

@@ -556,17 +556,19 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
      const ManagedShareLink       = $injector.get('ManagedShareLink');
  
      // Required services
-@@ -62,6 +63,39 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
-      */
-     var THUMBNAIL_UPDATE_FREQUENCY = 5000;
+@@ -55,12 +56,37 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+     const guacVideo               = $injector.get('guacVideo');
  
-+    /**
+     /**
+-     * The minimum amount of time to wait between updates to the client
+-     * thumbnail, in milliseconds.
 +     * Additional time that tunnel instability must persist before the user is
 +     * warned, in milliseconds. The underlying tunnel timeout remains
 +     * unchanged and continues to detect actual connection failure.
-+     *
-+     * @type Number
-+     */
+      *
+      * @type Number
+      */
+-    var THUMBNAIL_UPDATE_FREQUENCY = 5000;
 +    var TUNNEL_UNSTABLE_WARNING_DELAY = 3000;
 +
 +    /**
@@ -592,11 +594,10 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +     * @type Number
 +     */
 +    var CONTROL_MAX_DISPLAY_DELAY = 3000;
-+
+ 
      /**
       * Object which serves as a surrogate interface, encapsulating a Guacamole
-      * client while it is active, allowing it to be maintained in the
-@@ -221,6 +255,29 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -221,6 +247,29 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
           */
          this.clientState = template.clientState || new ManagedClientState();
  
@@ -626,7 +627,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
          /**
           * Properties associated with the display and behavior of the Guacamole
           * client.
-@@ -390,9 +447,164 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -390,9 +439,193 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
              tunnel : tunnel
          });
  
@@ -647,14 +648,31 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +        var minimumSyncOffset = null;
 +        var displayProcessingLag = 0;
 +
-+        // Enable Guacamole's built-in display statistics. Local rendering lag
-+        // and relative server timestamp drift reveal backlogs which tunnel
-+        // pings alone cannot detect.
++        // Keep Guacamole's built-in display statistics disabled unless the
++        // user has intentionally clicked. Gathering them for every rendered
++        // frame adds avoidable work during large remote-browser repaints.
 +        var display = client.getDisplay();
-+        display.statisticWindow = 5000;
++        display.statisticWindow = 0;
 +        display.onstatistics = function displayStatisticsAvailable(stats) {
 +            if (stats.processingLag !== null)
 +                displayProcessingLag = stats.processingLag;
++        };
++
++        /**
++         * Enables a small statistics window only while control responsiveness
++         * is actively being checked.
++         */
++        var enableControlResponseStatistics = function enableControlResponseStatistics() {
++            displayProcessingLag = 0;
++            display.statisticWindow = 1000;
++        };
++
++        /**
++         * Stops gathering per-frame display statistics.
++         */
++        var disableControlResponseStatistics = function disableControlResponseStatistics() {
++            display.statisticWindow = 0;
++            displayProcessingLag = 0;
 +        };
 +
 +        /**
@@ -666,6 +684,16 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +                $window.clearTimeout(controlResponseTimer);
 +            controlResponseTimer = null;
 +            controlInputsSinceSync = 0;
++            disableControlResponseStatistics();
++        };
++
++        /**
++         * Stops foreground responsiveness sampling as soon as the page is
++         * hidden. A fresh user gesture will start a new check after return.
++         */
++        var controlVisibilityChanged = function controlVisibilityChanged() {
++            if ($document[0].hidden)
++                resetControlResponseWatchdog();
 +        };
 +
 +        /**
@@ -679,6 +707,8 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +                    || currentTunnelState !== Guacamole.Tunnel.State.OPEN)
 +                return;
 +
++            if (!controlInputsSinceSync)
++                enableControlResponseStatistics();
 +            controlInputsSinceSync++;
 +            if (controlResponseTimer !== null)
 +                return;
@@ -691,11 +721,11 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +                        || serverSyncGeneration !== initialSyncGeneration
 +                        || currentTunnelState !== Guacamole.Tunnel.State.OPEN
 +                        || $document[0].hidden) {
-+                    controlInputsSinceSync = 0;
++                    resetControlResponseWatchdog();
 +                    return;
 +                }
 +
-+                controlInputsSinceSync = 0;
++                resetControlResponseWatchdog();
 +                $rootScope.$evalAsync(function markControlUnresponsive() {
 +                    if (currentTunnelState === Guacamole.Tunnel.State.OPEN
 +                            && !$document[0].hidden
@@ -791,7 +821,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
                  ManagedClientState.setConnectionState(managedClient.clientState,
                      ManagedClientState.ConnectionState.TUNNEL_ERROR,
                      status.code);
-@@ -410,28 +622,32 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -410,28 +643,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
  
          // Update connection state as tunnel state changes
          tunnel.onstatechange = function tunnelStateChanged(state) {
@@ -803,6 +833,8 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
                      // Connection is being established
                      case Guacamole.Tunnel.State.CONNECTING:
 +                        endUnstableWarning();
++                        $document[0].addEventListener(
++                            'visibilitychange', controlVisibilityChanged, false);
                          ManagedClientState.setConnectionState(managedClient.clientState,
                              ManagedClientState.ConnectionState.CONNECTING);
                          break;
@@ -823,18 +855,32 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
                      case Guacamole.Tunnel.State.CLOSED:
 +                        endUnstableWarning();
 +                        resetControlResponseWatchdog();
++                        $document[0].removeEventListener(
++                            'visibilitychange', controlVisibilityChanged, false);
                          ManagedClientState.setConnectionState(managedClient.clientState,
                              ManagedClientState.ConnectionState.DISCONNECTED);
                          break;
-@@ -539,13 +755,35 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -538,17 +779,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+             });
          };
  
-         // Automatically update the client thumbnail
+-        // Automatically update the client thumbnail
 -        client.onsync = function syncReceived() {
-+        client.onsync = function syncReceived(timestamp) {
- 
-             var thumbnail = managedClient.thumbnail;
+-
+-            var thumbnail = managedClient.thumbnail;
 -            var timestamp = new Date().getTime();
+-
+-            // Update thumbnail if it doesn't exist or is old
+-            if (!thumbnail || timestamp - thumbnail.timestamp >= THUMBNAIL_UPDATE_FREQUENCY) {
+-                $rootScope.$apply(function updateClientThumbnail() {
+-                    ManagedClient.updateThumbnail(managedClient);
+-                });
++        // Track remote display progress without generating a synchronous
++        // full-display thumbnail from this latency-sensitive sync callback.
++        // Initial and final thumbnails are still captured by client state
++        // transitions above.
++        client.onsync = function syncReceived(timestamp) {
++
 +            var localTimestamp = new Date().getTime();
 +
 +            // Guacamole sync timestamps are arbitrary but monotonic. The
@@ -854,18 +900,15 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +                serverSyncGeneration++;
 +                resetControlResponseWatchdog();
 +                if (managedClient.controlUnresponsive) {
-+                    managedClient.controlUnresponsive = false;
-+                    managedClient.reconnectSuggested = false;
++                    $rootScope.$evalAsync(function clearControlUnresponsive() {
++                        managedClient.controlUnresponsive = false;
++                        managedClient.reconnectSuggested = false;
++                    });
 +                }
-+            }
+             }
  
-             // Update thumbnail if it doesn't exist or is old
--            if (!thumbnail || timestamp - thumbnail.timestamp >= THUMBNAIL_UPDATE_FREQUENCY) {
-+            if (!thumbnail || localTimestamp - thumbnail.timestamp >= THUMBNAIL_UPDATE_FREQUENCY) {
-                 $rootScope.$apply(function updateClientThumbnail() {
-                     ManagedClient.updateThumbnail(managedClient);
-                 });
-@@ -958,6 +1196,24 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+         };
+@@ -958,6 +1218,24 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
          return !!(client && client.uploads && client.uploads.length);
      };
  

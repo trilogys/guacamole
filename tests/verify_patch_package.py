@@ -45,8 +45,8 @@ def main() -> int:
             "README.zh-CN.md must contain the Chinese documentation")
     require("[English](README.md)" in readme_zh,
             "Chinese README must link to the English README")
-    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" in readme_en and
-            "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" in readme_zh,
+    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in readme_en and
+            "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in readme_zh,
             "Both README files must document the default image")
     for needle in [
         "docker compose up -d --force-recreate --no-deps guacamole",
@@ -140,8 +140,13 @@ def main() -> int:
         "noteControlInput",
         "serverSyncGeneration",
         "minimumSyncOffset",
-        "display.statisticWindow = 5000",
+        "display.statisticWindow = 0",
+        "enableControlResponseStatistics",
+        "display.statisticWindow = 1000",
+        "disableControlResponseStatistics",
+        "controlVisibilityChanged",
         "displayProcessingLag",
+        "without generating a synchronous",
         "resetControlResponseWatchdog",
         "controlUnresponsive",
         "isClientConnectionRecoverable",
@@ -165,7 +170,7 @@ def main() -> int:
         ("docker image inspect", "构建结果检查"),
         ("/opt/guacamole/bin/initdb.sh", "镜像冒烟测试"),
         ("org.opencontainers.image.licenses=Apache-2.0", "OCI 许可证标签"),
-        ("org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery3", "具名恢复版本标签"),
+        ("org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery4", "具名恢复版本标签"),
         ("io.guacamole.recovery.patch-sha256", "恢复补丁哈希标签"),
     ]:
         require(needle in build, f"构建脚本缺少：{label}")
@@ -176,14 +181,14 @@ def main() -> int:
             "不得无条件拉取浮动基础镜像")
 
     compose = (root / "docker-compose.override.yml").read_text(encoding="utf-8")
-    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" in compose,
+    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in compose,
             "Compose override must use the named recovery image")
 
     workflow = (root / ".github/workflows/build-image.yml").read_text(encoding="utf-8")
     for needle, label in [
         ("Build and publish Guacamole recovery image", "Actions 工作流名称"),
-        ("Publish recovery3 from", "Actions 运行名称"),
-        ("PACKAGE_TAG: 1.6.0-recovery3", "具名镜像标签"),
+        ("Publish recovery4 from", "Actions 运行名称"),
+        ("PACKAGE_TAG: 1.6.0-recovery4", "具名镜像标签"),
         ('"${PACKAGE_TAG}" "${RELEASE_TAG}" main', "具名与滚动标签发布"),
     ]:
         require(needle in workflow, f"Actions 工作流缺少：{label}")
@@ -199,13 +204,13 @@ def main() -> int:
             "发布状态必须明确为受控部署候选版")
     require(metadata["end_to_end_rdp_validation"] is False,
             "不得把尚未完成的端到端验证标记为已完成")
-    require(metadata["package_version"] == "1.6.0-recovery3",
-            "发布元数据版本必须为 recovery3")
+    require(metadata["package_version"] == "1.6.0-recovery4",
+            "发布元数据版本必须为 recovery4")
     require(metadata["release_name"] == "Guacamole Input and Network Recovery",
             "发布元数据必须包含正式恢复版本名称")
     require(metadata["base_repository_commit"] == "db230461876a0b086f5ab32165a1eaea0dd39481",
             "发布元数据必须记录远端 main 比较基线")
-    require(metadata["default_image"] == "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3",
+    require(metadata["default_image"] == "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4",
             "Release metadata default image must use the named recovery tag")
     require(metadata["fallback_image"] == "guacamole/guacamole:1.6.0",
             "Release metadata fallback image must be official Guacamole 1.6.0")

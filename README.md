@@ -11,7 +11,7 @@ This repository is not an official Apache Software Foundation release.
 Pull the published image:
 
 ```bash
-docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ```
 
 Use it in Docker Compose:
@@ -19,7 +19,7 @@ Use it in Docker Compose:
 ```yaml
 services:
   guacamole:
-    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ```
 
 Update only the Guacamole web container:
@@ -35,8 +35,8 @@ Docker reuses unchanged layers, so later pulls normally download only changed la
 
 ## Published image tags
 
-- `1.6.0-recovery3`: current named recovery release documented by this package.
-- `1.6.0-recovery2`: previous recovery release retained for rollback.
+- `1.6.0-recovery4`: current named recovery release documented by this package.
+- `1.6.0-recovery3`: previous recovery release retained for rollback.
 - `1.6.0`: current moving release image; this tag is updated on each release build.
 - `main`: latest image built from the `main` branch.
 - `sha-<commit>`: immutable tag for a specific source commit.
@@ -89,6 +89,8 @@ High-frequency mouse movement is coalesced to the latest position at roughly 30 
 
 Chrome, Edge, video, animation, and complex page scrolling inside remote Windows generate substantial RDP display traffic. The patch detects severe backlog and recovers the connection, but cannot remove bottlenecks in the remote host, network, or `guacd` encoder. For the specific Guacamole RDP connection, prefer:
 
+Recovery4 no longer flattens the full live display and generates a thumbnail every five seconds from the sync callback. Thumbnails are still saved after the first connected frame and on disconnect. Per-frame display statistics are disabled by default and enabled with a one-second window only after intentional clicks while responsiveness is checked. This reduces main-thread competition during full repaint bursts such as opening a new remote browser tab.
+
 - `16`-bit color depth;
 - force-lossless disabled;
 - wallpaper, theming, font smoothing, full-window drag, desktop composition, and menu animations disabled;
@@ -103,7 +105,7 @@ A successful build publishes:
 
 ```text
 ghcr.io/trilogys/guacamole_patch:1.6.0
-ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ghcr.io/trilogys/guacamole_patch:main
 ghcr.io/trilogys/guacamole_patch:sha-<commit>
 ```
@@ -128,7 +130,7 @@ Clone and build:
 git clone https://github.com/trilogys/guacamole_patch.git
 cd guacamole_patch
 
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
 bash ./build.sh
 ```
 
@@ -136,7 +138,7 @@ For a faster troubleshooting build:
 
 ```bash
 MAVEN_ARGUMENTS="-T 1C -Dmaven.test.skip=true" \
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
 bash ./build.sh
 ```
 
@@ -145,14 +147,14 @@ bash ./build.sh
 ## Verify the image
 
 ```bash
-docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3 \
+docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4 \
   --format '{{index .Config.Labels "io.guacamole.recovery.patch-sha256"}}'
 ```
 
 Expected patch SHA-256:
 
 ```text
-4511b8255f316fc1d8cc4009d1ad4f26e0f7394e4c627070087d5a5581b96b8e
+b022cfb268a0c18d812e1dcdc7867ee61554de2e9f02ffe369abce0dff535c89
 ```
 
 ## Acceptance testing

@@ -11,7 +11,7 @@
 拉取已经构建好的镜像：
 
 ```bash
-docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ```
 
 在 Docker Compose 中使用：
@@ -19,7 +19,7 @@ docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
 ```yaml
 services:
   guacamole:
-    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ```
 
 只更新 Guacamole Web 容器：
@@ -35,8 +35,8 @@ Docker 会复用没有变化的镜像层，后续拉取通常只下载发生变�
 
 ## 镜像标签
 
-- `1.6.0-recovery3`：本补丁包对应的当前具名恢复版本。
-- `1.6.0-recovery2`：保留用于回滚的上一恢复版本。
+- `1.6.0-recovery4`：本补丁包对应的当前具名恢复版本。
+- `1.6.0-recovery3`：保留用于回滚的上一恢复版本。
 - `1.6.0`：当前滚动发布镜像，每次正式构建都会更新这个标签。
 - `main`：由 `main` 分支最新代码构建。
 - `sha-<commit>`：对应特定源码提交的固定标签，适合精确部署和回滚。
@@ -89,6 +89,8 @@ Guacamole 原本在大约 1.5 秒未收到隧道数据后就把连接标记为�
 
 远程 Windows 中打开 Chrome、Edge、视频、动画或滚动复杂网页会产生大量 RDP 画面更新。补丁可以识别严重积压并恢复连接，但不能消除远端主机、网络带宽或 `guacd` 编码能力不足。建议在 Guacamole 的具体 RDP 连接中使用：
 
+recovery4 不再从实时画面同步回调中每 5 秒展开完整画布并生成缩略图。缩略图仍会在首次连接和断开时保存；逐帧显示统计默认关闭，仅在用户点击后临时启用 1 秒窗口进行响应检测。这可以减少新建远程浏览器标签页、大面积重绘时与 Guacamole 前端任务争用主线程的概率。
+
 - 颜色深度设为 `16`；
 - 不启用“强制无损”；
 - 不启用壁纸、主题、字体平滑、拖动时显示窗口内容、桌面合成和菜单动画；
@@ -103,7 +105,7 @@ Guacamole 原本在大约 1.5 秒未收到隧道数据后就把连接标记为�
 
 ```text
 ghcr.io/trilogys/guacamole_patch:1.6.0
-ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3
+ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
 ghcr.io/trilogys/guacamole_patch:main
 ghcr.io/trilogys/guacamole_patch:sha-<commit>
 ```
@@ -128,7 +130,7 @@ mktemp
 git clone https://github.com/trilogys/guacamole_patch.git
 cd guacamole_patch
 
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
 bash ./build.sh
 ```
 
@@ -136,7 +138,7 @@ bash ./build.sh
 
 ```bash
 MAVEN_ARGUMENTS="-T 1C -Dmaven.test.skip=true" \
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
 bash ./build.sh
 ```
 
@@ -145,14 +147,14 @@ bash ./build.sh
 ## 验证镜像
 
 ```bash
-docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery3 \
+docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4 \
   --format '{{index .Config.Labels "io.guacamole.recovery.patch-sha256"}}'
 ```
 
 预期补丁 SHA-256：
 
 ```text
-4511b8255f316fc1d8cc4009d1ad4f26e0f7394e4c627070087d5a5581b96b8e
+b022cfb268a0c18d812e1dcdc7867ee61554de2e9f02ffe369abce0dff535c89
 ```
 
 ## 验收测试

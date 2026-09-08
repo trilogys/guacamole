@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0-recovery4
+
+- Remove synchronous full-display thumbnail generation from the live sync callback; thumbnails remain captured on initial connection and disconnect.
+- Disable Guacamole display statistics by default and enable a smaller one-second window only while intentional clicks are being checked for responsiveness.
+- Stop temporary rendering statistics immediately after a timely sync, a watchdog timeout, a hidden page, or tunnel teardown.
+- Preserve all recovery3 input, network, mouse ordering, and balancing-group safeguards.
+
 ## 1.6.0-recovery3
 
 - Rebuild a confirmed, persistently unstable direct connection without waiting for the tunnel to recover or the browser page to be refreshed.

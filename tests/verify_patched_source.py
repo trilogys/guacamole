@@ -143,10 +143,23 @@ def main() -> int:
     require(managed, "noteControlInput", "记录有意的控制输入")
     require(managed, "serverSyncGeneration", "以远端同步确认控制路径进展")
     require(managed, "minimumSyncOffset", "以最佳同步偏移识别网络排队")
-    require(managed, "display.statisticWindow = 5000", "启用浏览器渲染统计")
+    require(managed, "display.statisticWindow = 0", "默认关闭逐帧浏览器渲染统计")
+    require(managed, "enableControlResponseStatistics", "点击后按需启用渲染统计")
+    require(managed, "display.statisticWindow = 1000", "控制检查使用短统计窗口")
+    require(managed, "disableControlResponseStatistics", "响应或超时后关闭渲染统计")
+    require(managed, "controlVisibilityChanged", "页面隐藏时立即停止响应统计")
     require(managed, "displayProcessingLag", "识别浏览器本地画面处理积压")
     require(managed, "resetControlResponseWatchdog", "远端同步或断线时清理看门狗")
     require(managed, "controlUnresponsive", "控制路径无响应状态")
+    require(managed, "removeEventListener(\n                            'visibilitychange', controlVisibilityChanged", "断线时清理响应统计监听器")
+    require(managed, "without generating a synchronous", "同步回调避开全画面缩略图")
+    forbid(managed, "THUMBNAIL_UPDATE_FREQUENCY", "前台同步不得周期生成缩略图")
+    sync_handler = managed.split("client.onsync = function syncReceived", 1)[1]
+    sync_handler = sync_handler.split("client.onargv", 1)[0]
+    forbid(sync_handler, "ManagedClient.updateThumbnail", "实时同步回调不得生成缩略图")
+    thumbnail_calls = managed.count("ManagedClient.updateThumbnail(managedClient);")
+    if "/* sparse filler" not in managed and thumbnail_calls != 2:
+        raise AssertionError("缩略图只能在首次连接和断开生命周期生成")
     forbid(managed, "tunnel.unstableThreshold =", "不得削弱底层不稳定检测阈值")
     forbid(managed, "tunnel.receiveTimeout =", "不得延长底层断线超时")
 

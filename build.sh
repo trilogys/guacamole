@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SUPPORTED_VERSION="1.6.0"
 GUACAMOLE_VERSION="${GUACAMOLE_VERSION:-${SUPPORTED_VERSION}}"
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/trilogys/guacamole_patch:${GUACAMOLE_VERSION}-recovery3}"
+IMAGE_NAME="${IMAGE_NAME:-ghcr.io/trilogys/guacamole_patch:${GUACAMOLE_VERSION}-recovery4}"
 MAVEN_ARGUMENTS="${MAVEN_ARGUMENTS:--DskipTests=false}"
 PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
@@ -110,7 +110,7 @@ fi
 DOCKER_BUILD_ARGS=(
     --build-arg "MAVEN_ARGUMENTS=${MAVEN_ARGUMENTS}"
     --label "org.opencontainers.image.title=Apache Guacamole with input and network recovery"
-    --label "org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery3"
+    --label "org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery4"
     --label "org.opencontainers.image.source=https://github.com/apache/guacamole-client"
     --label "org.opencontainers.image.licenses=Apache-2.0"
     --label "io.guacamole.recovery.patch-sha256=${PATCH_SHA256}"
