@@ -15,7 +15,10 @@ TARGETS = [
     "guacamole/src/main/frontend/src/app/textInput/directives/guacTextInput.js",
     "guacamole/src/main/frontend/src/app/client/directives/guacTiledClients.js",
     "guacamole/src/main/frontend/src/app/client/directives/guacClient.js",
+    "guacamole/src/main/frontend/src/app/client/directives/guacClientNotification.js",
     "guacamole/src/main/frontend/src/app/index/controllers/indexController.js",
+    "guacamole/src/main/frontend/src/app/settings/services/preferenceService.js",
+    "guacamole/src/main/frontend/src/app/settings/templates/settingsPreferences.html",
     "guacamole/src/main/frontend/src/translations/en.json",
     "guacamole/src/main/frontend/src/translations/zh.json",
 ]
@@ -45,8 +48,8 @@ def main() -> int:
             "README.zh-CN.md must contain the Chinese documentation")
     require("[English](README.md)" in readme_zh,
             "Chinese README must link to the English README")
-    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in readme_en and
-            "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in readme_zh,
+    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" in readme_en and
+            "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" in readme_zh,
             "Both README files must document the default image")
     for needle in [
         "docker compose up -d --force-recreate --no-deps guacamole",
@@ -114,20 +117,28 @@ def main() -> int:
         "endUnstableWarning",
         "reconnectSuggested",
         "isConnectionRecoveryAvailable",
-        "reconnectDegradedClients",
-        "guacClientManager.replaceManagedClient",
         "dismissConnectionRecovery",
         "TEXT_CLIENT_STATUS_RECOVERED_SLOW",
         "ACTION_DISMISS_RECOVERY",
         "hasActiveTransfers",
-        "AUTO_RECONNECT_DELAY = 5000",
-        "AUTO_RECONNECT_MAX_ATTEMPTS = 2",
-        "AUTO_RECONNECT_RESET_DELAY = 60000",
-        "queueAutoReconnect",
-        "cancelAutoReconnect",
-        "scheduleAutoReconnectReset",
-        "isAutomaticReconnectPending",
-        "TEXT_CLIENT_STATUS_RECOVERED_RECONNECTING",
+        "automaticRefresh : false",
+        "AUTO_REFRESH_STATE_KEY",
+        "AUTO_REFRESH_DELAY = 5000",
+        "AUTO_REFRESH_MAX_ATTEMPTS = 2",
+        "AUTO_REFRESH_RESET_DELAY = 60000",
+        "automaticRefreshStorageAvailable",
+        "typeof state.attempts !== 'number'",
+        "canAutomaticallyRefresh",
+        "getAutomaticRefreshDelay",
+        "resetAutomaticRefresh",
+        "$window.sessionStorage",
+        "$window.location.reload();",
+        "queueAutoRefresh",
+        "cancelAutoRefresh",
+        "isAutomaticRefreshPending",
+        "TEXT_CLIENT_STATUS_RECOVERED_REFRESHING",
+        "ACTION_REFRESH_PAGE",
+        "HELP_AUTOMATIC_REFRESH",
         "MOUSE_MOVE_INTERVAL = 33",
         "copyMouseState",
         "pendingMouseMove",
@@ -150,8 +161,6 @@ def main() -> int:
         "resetControlResponseWatchdog",
         "controlUnresponsive",
         "isClientConnectionRecoverable",
-        "isAutomaticReconnectSafe",
-        "ClientIdentifier.Types.CONNECTION_GROUP",
     ]
     for needle in required:
         require(needle in patch, f"补丁缺少关键逻辑：{needle}")
@@ -161,6 +170,8 @@ def main() -> int:
         ("--dry-run", "构建前补丁 dry-run"),
         ("-DskipTests=false", "默认运行 Guacamole 上游测试"),
         ("verify_patched_source.py", "已打补丁源码检查"),
+        ("guacClientNotification.js", "连接错误整页刷新脚本语法检查"),
+        ("preferenceService.js", "整页刷新偏好脚本语法检查"),
         ("SOURCE_SHA256=\"81f9fd5a", "Guacamole 1.6.0 源码哈希"),
         ("sha256sum --check --status SHA256SUMS", "补丁包内部完整性检查"),
         ("SUPPORTED_VERSION=\"1.6.0\"", "版本锁定"),
@@ -170,7 +181,7 @@ def main() -> int:
         ("docker image inspect", "构建结果检查"),
         ("/opt/guacamole/bin/initdb.sh", "镜像冒烟测试"),
         ("org.opencontainers.image.licenses=Apache-2.0", "OCI 许可证标签"),
-        ("org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery4", "具名恢复版本标签"),
+        ("org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery5", "具名恢复版本标签"),
         ("io.guacamole.recovery.patch-sha256", "恢复补丁哈希标签"),
     ]:
         require(needle in build, f"构建脚本缺少：{label}")
@@ -181,14 +192,14 @@ def main() -> int:
             "不得无条件拉取浮动基础镜像")
 
     compose = (root / "docker-compose.override.yml").read_text(encoding="utf-8")
-    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" in compose,
+    require("ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" in compose,
             "Compose override must use the named recovery image")
 
     workflow = (root / ".github/workflows/build-image.yml").read_text(encoding="utf-8")
     for needle, label in [
         ("Build and publish Guacamole recovery image", "Actions 工作流名称"),
-        ("Publish recovery4 from", "Actions 运行名称"),
-        ("PACKAGE_TAG: 1.6.0-recovery4", "具名镜像标签"),
+        ("Publish recovery5 from", "Actions 运行名称"),
+        ("PACKAGE_TAG: 1.6.0-recovery5", "具名镜像标签"),
         ('"${PACKAGE_TAG}" "${RELEASE_TAG}" main', "具名与滚动标签发布"),
     ]:
         require(needle in workflow, f"Actions 工作流缺少：{label}")
@@ -204,13 +215,13 @@ def main() -> int:
             "发布状态必须明确为受控部署候选版")
     require(metadata["end_to_end_rdp_validation"] is False,
             "不得把尚未完成的端到端验证标记为已完成")
-    require(metadata["package_version"] == "1.6.0-recovery4",
-            "发布元数据版本必须为 recovery4")
+    require(metadata["package_version"] == "1.6.0-recovery5",
+            "发布元数据版本必须为 recovery5")
     require(metadata["release_name"] == "Guacamole Input and Network Recovery",
             "发布元数据必须包含正式恢复版本名称")
     require(metadata["base_repository_commit"] == "db230461876a0b086f5ab32165a1eaea0dd39481",
             "发布元数据必须记录远端 main 比较基线")
-    require(metadata["default_image"] == "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4",
+    require(metadata["default_image"] == "ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5",
             "Release metadata default image must use the named recovery tag")
     require(metadata["fallback_image"] == "guacamole/guacamole:1.6.0",
             "Release metadata fallback image must be official Guacamole 1.6.0")

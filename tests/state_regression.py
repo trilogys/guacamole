@@ -228,26 +228,28 @@ class MouseInputState:
         self.move_due = None
 
 
-class UnstableWarningState:
-    """Model the UI grace period layered over tunnel instability."""
+class PageRefreshState:
+    """Model opt-in, bounded full-page refresh after confirmed instability."""
 
     WARNING_DELAY = 3000
-    AUTO_RECONNECT_DELAY = 5000
-    AUTO_RECONNECT_MAX_ATTEMPTS = 2
-    AUTO_RECONNECT_RESET_DELAY = 60000
+    AUTO_REFRESH_DELAY = 5000
+    AUTO_REFRESH_MAX_ATTEMPTS = 2
+    AUTO_REFRESH_RESET_DELAY = 60000
 
-    def __init__(self, identifier_type: str = "c") -> None:
+    def __init__(self, *, automatic_refresh: bool = False) -> None:
         self.now = 0
-        self.identifier_type = identifier_type
+        self.automatic_refresh = automatic_refresh
+        self.storage_available = True
         self.hidden = False
         self.tunnel_state = "open"
         self.warning_visible = False
         self.warning_due: int | None = None
         self.reconnect_suggested = False
         self.active_transfer = False
-        self.auto_reconnect_due: int | None = None
-        self.auto_reconnect_attempts = 0
-        self.auto_reconnects = 0
+        self.auto_refresh_due: int | None = None
+        self.auto_refresh_attempts = 0
+        self.page_refreshes = 0
+        self.manual_refreshes = 0
         self.attempt_reset_due: int | None = None
 
     def schedule_warning(self) -> None:
@@ -265,14 +267,21 @@ class UnstableWarningState:
             self.warning_visible = False
             self.warning_due = None
             if state == "open":
-                self.queue_auto_reconnect()
-                if self.auto_reconnect_attempts:
-                    self.attempt_reset_due = self.now + self.AUTO_RECONNECT_RESET_DELAY
+                self.queue_auto_refresh()
+                if self.auto_refresh_attempts:
+                    self.attempt_reset_due = self.now + self.AUTO_REFRESH_RESET_DELAY
 
     def set_hidden(self, hidden: bool) -> None:
         self.hidden = hidden
         if self.tunnel_state == "unstable":
             self.schedule_warning()
+
+    def set_automatic_refresh(self, enabled: bool) -> None:
+        self.automatic_refresh = enabled
+        if enabled:
+            self.queue_auto_refresh()
+        else:
+            self.auto_refresh_due = None
 
     def advance(self, milliseconds: int) -> None:
         self.now += milliseconds
@@ -281,46 +290,50 @@ class UnstableWarningState:
             if self.tunnel_state == "unstable" and not self.hidden:
                 self.warning_visible = True
                 self.reconnect_suggested = True
-                self.queue_auto_reconnect()
+                self.queue_auto_refresh()
 
-        if self.auto_reconnect_due is not None and self.now >= self.auto_reconnect_due:
-            self.auto_reconnect_due = None
-            if self.can_auto_reconnect():
-                self.auto_reconnect_attempts += 1
-                self.auto_reconnects += 1
+        if self.auto_refresh_due is not None and self.now >= self.auto_refresh_due:
+            self.auto_refresh_due = None
+            if self.can_auto_refresh():
+                self.auto_refresh_attempts += 1
+                self.page_refreshes += 1
                 self.reconnect_suggested = False
-                self.attempt_reset_due = self.now + self.AUTO_RECONNECT_RESET_DELAY
+                self.attempt_reset_due = self.now + self.AUTO_REFRESH_RESET_DELAY
 
         if self.attempt_reset_due is not None and self.now >= self.attempt_reset_due:
             self.attempt_reset_due = None
-            if self.tunnel_state == "open":
-                self.auto_reconnect_attempts = 0
+            if self.tunnel_state == "open" and not self.reconnect_suggested:
+                self.auto_refresh_attempts = 0
 
-    def can_auto_reconnect(self) -> bool:
+    def can_auto_refresh(self) -> bool:
         return (
-            self.recovery_available()
-            and self.identifier_type != "g"
+            self.automatic_refresh
+            and self.storage_available
+            and self.recovery_available()
             and not self.active_transfer
+            and self.auto_refresh_attempts < self.AUTO_REFRESH_MAX_ATTEMPTS
         )
 
-    def queue_auto_reconnect(self) -> None:
-        if (
-            self.can_auto_reconnect()
-            and self.auto_reconnect_attempts < self.AUTO_RECONNECT_MAX_ATTEMPTS
-        ):
-            delay = self.AUTO_RECONNECT_DELAY * (2 ** self.auto_reconnect_attempts)
-            self.auto_reconnect_due = self.now + delay
+    def queue_auto_refresh(self) -> None:
+        if self.can_auto_refresh() and self.auto_refresh_due is None:
+            delay = self.AUTO_REFRESH_DELAY * (2 ** self.auto_refresh_attempts)
+            self.auto_refresh_due = self.now + delay
 
     def set_active_transfer(self, active: bool) -> None:
         self.active_transfer = active
         if active:
-            self.auto_reconnect_due = None
+            self.auto_refresh_due = None
         else:
-            self.queue_auto_reconnect()
+            self.queue_auto_refresh()
 
     def dismiss_recovery(self) -> None:
-        self.auto_reconnect_due = None
+        self.auto_refresh_due = None
         self.reconnect_suggested = False
+
+    def manual_refresh(self) -> None:
+        self.auto_refresh_due = None
+        self.auto_refresh_attempts = 0
+        self.manual_refreshes += 1
 
     def recovery_available(self) -> bool:
         return self.reconnect_suggested and self.tunnel_state in {
@@ -594,9 +607,9 @@ def main() -> None:
     assert stale_mouse.sent == []
 
     # A brief unstable state must recover without flashing a warning.
-    brief_stall = UnstableWarningState()
+    brief_stall = PageRefreshState()
     brief_stall.set_tunnel_state("unstable")
-    brief_stall.advance(UnstableWarningState.WARNING_DELAY - 1)
+    brief_stall.advance(PageRefreshState.WARNING_DELAY - 1)
     assert brief_stall.warning_visible is False
     brief_stall.set_tunnel_state("open")
     brief_stall.advance(1)
@@ -604,9 +617,9 @@ def main() -> None:
     assert brief_stall.reconnect_suggested is False
 
     # A sustained visible disruption must still warn before tunnel timeout.
-    sustained_stall = UnstableWarningState()
+    sustained_stall = PageRefreshState()
     sustained_stall.set_tunnel_state("unstable")
-    sustained_stall.advance(UnstableWarningState.WARNING_DELAY)
+    sustained_stall.advance(PageRefreshState.WARNING_DELAY)
     assert sustained_stall.warning_visible is True
     assert sustained_stall.reconnect_suggested is True
     sustained_stall.set_tunnel_state("open")
@@ -619,13 +632,13 @@ def main() -> None:
     assert sustained_stall.reconnect_suggested is False
 
     # Background throttling must not produce a warning immediately on return.
-    background_stall = UnstableWarningState()
+    background_stall = PageRefreshState()
     background_stall.set_hidden(True)
     background_stall.set_tunnel_state("unstable")
     background_stall.advance(15000)
     assert background_stall.warning_visible is False
     background_stall.set_hidden(False)
-    background_stall.advance(UnstableWarningState.WARNING_DELAY - 1)
+    background_stall.advance(PageRefreshState.WARNING_DELAY - 1)
     assert background_stall.warning_visible is False
     background_stall.advance(1)
     assert background_stall.warning_visible is True
@@ -635,32 +648,56 @@ def main() -> None:
     assert background_stall.warning_visible is False
     assert background_stall.warning_due is None
 
-    # A tunnel which remains unstable must be rebuilt before the underlying
-    # receive timeout leaves the user with a frozen, uncontrollable canvas.
-    persistent_stall = UnstableWarningState()
+    # Automatic full-page refresh is opt-in. Without it, the lower-right
+    # warning remains available for explicit manual refresh.
+    manual_only = PageRefreshState()
+    manual_only.set_tunnel_state("unstable")
+    manual_only.advance(PageRefreshState.WARNING_DELAY)
+    manual_only.advance(PageRefreshState.AUTO_REFRESH_DELAY * 2)
+    assert manual_only.page_refreshes == 0
+    assert manual_only.recovery_available() is True
+    manual_only.manual_refresh()
+    assert manual_only.manual_refreshes == 1
+
+    # With the preference enabled, a tunnel which remains unstable refreshes
+    # the entire page before the underlying receive timeout.
+    persistent_stall = PageRefreshState(automatic_refresh=True)
     persistent_stall.set_tunnel_state("unstable")
-    persistent_stall.advance(UnstableWarningState.WARNING_DELAY)
-    assert persistent_stall.auto_reconnect_due is not None
-    persistent_stall.advance(UnstableWarningState.AUTO_RECONNECT_DELAY)
-    assert persistent_stall.auto_reconnects == 1
+    persistent_stall.advance(PageRefreshState.WARNING_DELAY)
+    assert persistent_stall.auto_refresh_due is not None
+    persistent_stall.advance(PageRefreshState.AUTO_REFRESH_DELAY)
+    assert persistent_stall.page_refreshes == 1
 
-    # A confirmed tunnel failure that closes while recovery is pending must
-    # retain the pending rebuild instead of requiring a browser refresh.
-    closed_stall = UnstableWarningState()
+    # A confirmed tunnel failure that closes while recovery is pending retains
+    # the pending full-page refresh.
+    closed_stall = PageRefreshState(automatic_refresh=True)
     closed_stall.set_tunnel_state("unstable")
-    closed_stall.advance(UnstableWarningState.WARNING_DELAY)
+    closed_stall.advance(PageRefreshState.WARNING_DELAY)
     closed_stall.set_tunnel_state("tunnel_error")
-    closed_stall.advance(UnstableWarningState.AUTO_RECONNECT_DELAY)
-    assert closed_stall.auto_reconnects == 1
+    closed_stall.advance(PageRefreshState.AUTO_REFRESH_DELAY)
+    assert closed_stall.page_refreshes == 1
 
-    # Balancing groups can select another backend on reconnect. Keep the
-    # recovery action visible, but never switch those sessions automatically.
-    balancing_group = UnstableWarningState(identifier_type="g")
-    balancing_group.set_tunnel_state("unstable")
-    balancing_group.advance(UnstableWarningState.WARNING_DELAY)
-    balancing_group.advance(UnstableWarningState.AUTO_RECONNECT_DELAY * 2)
-    assert balancing_group.auto_reconnects == 0
-    assert balancing_group.recovery_available() is True
+    # Disabling the setting while a delayed refresh is pending cancels it
+    # immediately without hiding the manual recovery path.
+    preference_toggle = PageRefreshState(automatic_refresh=True)
+    preference_toggle.set_tunnel_state("unstable")
+    preference_toggle.advance(PageRefreshState.WARNING_DELAY)
+    assert preference_toggle.auto_refresh_due is not None
+    preference_toggle.set_automatic_refresh(False)
+    preference_toggle.advance(PageRefreshState.AUTO_REFRESH_DELAY)
+    assert preference_toggle.page_refreshes == 0
+    assert preference_toggle.recovery_available() is True
+
+    # Automatic refresh is disabled when session storage cannot preserve the
+    # cross-reload loop guard. Manual refresh remains available.
+    storage_guard = PageRefreshState(automatic_refresh=True)
+    storage_guard.storage_available = False
+    storage_guard.set_tunnel_state("unstable")
+    storage_guard.advance(PageRefreshState.WARNING_DELAY)
+    storage_guard.advance(PageRefreshState.AUTO_REFRESH_DELAY)
+    assert storage_guard.page_refreshes == 0
+    storage_guard.manual_refresh()
+    assert storage_guard.manual_refreshes == 1
 
     # Several intentional presses with no later display sync indicate a
     # wedged downstream control path even while WebSocket pings remain healthy.
@@ -730,55 +767,56 @@ def main() -> None:
     thumbnails.disconnected()
     assert thumbnails.updates == ["connected", "disconnected"]
 
-    # A confirmed disruption that recovers queues one bounded reconnect after
-    # the initial stable delay.
-    auto_recovery = UnstableWarningState()
+    # A confirmed disruption queues one bounded full-page refresh after the
+    # initial delay when the opt-in preference is enabled.
+    auto_recovery = PageRefreshState(automatic_refresh=True)
     auto_recovery.set_tunnel_state("unstable")
-    auto_recovery.advance(UnstableWarningState.WARNING_DELAY)
+    auto_recovery.advance(PageRefreshState.WARNING_DELAY)
     auto_recovery.set_tunnel_state("open")
-    auto_recovery.advance(UnstableWarningState.AUTO_RECONNECT_DELAY - 1)
-    assert auto_recovery.auto_reconnects == 0
+    auto_recovery.advance(PageRefreshState.AUTO_REFRESH_DELAY - 1)
+    assert auto_recovery.page_refreshes == 0
     auto_recovery.advance(1)
-    assert auto_recovery.auto_reconnects == 1
-    assert auto_recovery.auto_reconnect_attempts == 1
+    assert auto_recovery.page_refreshes == 1
+    assert auto_recovery.auto_refresh_attempts == 1
     assert auto_recovery.reconnect_suggested is False
 
-    # A second disruption backs off, while a third consecutive disruption is
-    # left for manual recovery instead of entering a reconnect loop.
+    # A second disruption backs off, while a third consecutive disruption
+    # remains manual instead of entering a full-page refresh loop.
     auto_recovery.set_tunnel_state("unstable")
-    auto_recovery.advance(UnstableWarningState.WARNING_DELAY)
+    auto_recovery.advance(PageRefreshState.WARNING_DELAY)
     auto_recovery.set_tunnel_state("open")
-    auto_recovery.advance(UnstableWarningState.AUTO_RECONNECT_DELAY * 2)
-    assert auto_recovery.auto_reconnects == 2
-    assert auto_recovery.auto_reconnect_attempts == 2
+    auto_recovery.advance(PageRefreshState.AUTO_REFRESH_DELAY * 2)
+    assert auto_recovery.page_refreshes == 2
+    assert auto_recovery.auto_refresh_attempts == 2
     auto_recovery.set_tunnel_state("unstable")
-    auto_recovery.advance(UnstableWarningState.WARNING_DELAY)
+    auto_recovery.advance(PageRefreshState.WARNING_DELAY)
     auto_recovery.set_tunnel_state("open")
-    assert auto_recovery.auto_reconnect_due is None
-    auto_recovery.advance(UnstableWarningState.AUTO_RECONNECT_DELAY * 4)
-    assert auto_recovery.auto_reconnects == 2
+    assert auto_recovery.auto_refresh_due is None
+    auto_recovery.advance(PageRefreshState.AUTO_REFRESH_DELAY * 4)
+    assert auto_recovery.page_refreshes == 2
 
     # A continuous stable minute resets the retry budget for a future event.
-    auto_recovery.advance(UnstableWarningState.AUTO_RECONNECT_RESET_DELAY)
-    assert auto_recovery.auto_reconnect_attempts == 0
+    auto_recovery.dismiss_recovery()
+    auto_recovery.advance(PageRefreshState.AUTO_REFRESH_RESET_DELAY)
+    assert auto_recovery.auto_refresh_attempts == 0
 
-    # Active transfers and an explicit request to keep the current session both
-    # cancel automatic reconnect without clearing the manual recovery path.
-    transfer_guard = UnstableWarningState()
+    # Active transfers and an explicit request not to refresh both cancel the
+    # delayed action without clearing the manual recovery path prematurely.
+    transfer_guard = PageRefreshState(automatic_refresh=True)
     transfer_guard.set_tunnel_state("unstable")
-    transfer_guard.advance(UnstableWarningState.WARNING_DELAY)
+    transfer_guard.advance(PageRefreshState.WARNING_DELAY)
     transfer_guard.set_tunnel_state("open")
     transfer_guard.set_active_transfer(True)
-    transfer_guard.advance(UnstableWarningState.AUTO_RECONNECT_DELAY * 2)
-    assert transfer_guard.auto_reconnects == 0
+    transfer_guard.advance(PageRefreshState.AUTO_REFRESH_DELAY * 2)
+    assert transfer_guard.page_refreshes == 0
     assert transfer_guard.reconnect_suggested is True
     transfer_guard.set_active_transfer(False)
-    assert transfer_guard.auto_reconnect_due is not None
+    assert transfer_guard.auto_refresh_due is not None
     transfer_guard.dismiss_recovery()
-    transfer_guard.advance(UnstableWarningState.AUTO_RECONNECT_DELAY)
-    assert transfer_guard.auto_reconnects == 0
+    transfer_guard.advance(PageRefreshState.AUTO_REFRESH_DELAY)
+    assert transfer_guard.page_refreshes == 0
 
-    print("输入法、鼠标合并、焦点所有权、修饰键、网络提示、自动重连和竞态状态回归测试通过。")
+    print("输入法、鼠标合并、焦点所有权、网络提示、整页刷新和竞态状态回归测试通过。")
 
 
 if __name__ == "__main__":

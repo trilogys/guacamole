@@ -1,5 +1,5 @@
 name: Build and publish Guacamole recovery image
-run-name: Publish recovery4 from ${{ github.ref_name }} @ ${{ github.sha }}
+run-name: Publish recovery5 from ${{ github.ref_name }} @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -24,11 +24,11 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   RELEASE_TAG: 1.6.0
-  PACKAGE_TAG: 1.6.0-recovery4
+  PACKAGE_TAG: 1.6.0-recovery5
 
 jobs:
   build-and-publish:
-    name: Build and publish recovery4
+    name: Build and publish recovery5
     runs-on: ubuntu-latest
     timeout-minutes: 90
 

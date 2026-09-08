@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0-recovery5
+
+- Add an opt-in browser-local setting for delayed automatic refresh of the entire Guacamole page after confirmed network or control failure; the default is off.
+- Keep a lower-right manual **Refresh page** action whenever automatic refresh is disabled or unavailable.
+- Apply the same preference to terminal client/tunnel error countdowns and manual error-dialog recovery.
+- Protect active file transfers and persist a per-tab refresh guard through `sessionStorage`, with 5/10-second backoff, a two-attempt limit, and a stable-minute reset.
+- Disable automatic refresh when cross-reload loop state cannot be stored safely, while preserving manual refresh.
+- Warn that full-page refresh can select a different backend or remote session.
+
 ## 1.6.0-recovery4
 
 - Remove synchronous full-display thumbnail generation from the live sync callback; thumbnails remain captured on initial connection and disconnect.

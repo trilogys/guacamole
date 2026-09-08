@@ -11,7 +11,7 @@ This repository is not an official Apache Software Foundation release.
 Pull the published image:
 
 ```bash
-docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
+docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
 ```
 
 Use it in Docker Compose:
@@ -19,7 +19,7 @@ Use it in Docker Compose:
 ```yaml
 services:
   guacamole:
-    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
+    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
 ```
 
 Update only the Guacamole web container:
@@ -35,8 +35,8 @@ Docker reuses unchanged layers, so later pulls normally download only changed la
 
 ## Published image tags
 
-- `1.6.0-recovery4`: current named recovery release documented by this package.
-- `1.6.0-recovery3`: previous recovery release retained for rollback.
+- `1.6.0-recovery5`: current named recovery release documented by this package.
+- `1.6.0-recovery4`: previous recovery release retained for rollback.
 - `1.6.0`: current moving release image; this tag is updated on each release build.
 - `main`: latest image built from the `main` branch.
 - `sha-<commit>`: immutable tag for a specific source commit.
@@ -75,11 +75,11 @@ Guacamole normally marks a tunnel unstable after roughly 1.5 seconds without inb
 
 The underlying instability detector and 15-second receive timeout are unchanged. Sustained network or server failures are still reported and disconnected normally.
 
-After a confirmed unstable period, recovery automatically rebuilds only the affected direct connection after five seconds, without requiring the tunnel to recover first. A second consecutive attempt waits ten seconds, and recovery stops after two attempts to prevent loops. One stable minute resets the retry budget.
+An opt-in **Delayed automatic page refresh** switch is available under **User settings → Connection Recovery** and in the current connection menu. It is off by default. When off, no automatic action occurs and the lower-right warning retains **Refresh page**. When enabled, the first confirmed failure refreshes the entire current page after roughly five seconds and the second waits roughly ten seconds. Each browser tab is limited to two consecutive automatic refreshes; one stable minute resets the budget.
 
-If the tunnel remains open but three intentional mouse presses receive no timely remote display sync for eight seconds, recovery also treats the downstream control path as wedged. Guacamole's display statistics and relative sync timing are used to identify network queueing or browser rendering delays above three seconds, so a stream of stale frames does not mask the failure. Automatic reconnect is cancelled while a file transfer is active or if **Keep current session** is selected. Manual **Reconnect** remains available after the retry limit. The Guacamole login, page route, and unaffected tiled connections are preserved.
+If the tunnel remains open but three intentional mouse presses receive no timely remote display sync for eight seconds, recovery also treats the downstream control path as wedged. Guacamole's display statistics and relative sync timing identify network queueing or browser rendering delays above three seconds. Active file transfers, disabling automatic refresh, or selecting **Do not refresh** cancel the pending action. If browser session storage cannot safely persist the cross-refresh counter, automatic refresh is disabled while manual refresh remains available.
 
-Reconnecting a balancing group may select another backend, so group recovery remains manual and never switches the displayed machine automatically. Use a specific Guacamole connection instead of a balancing group when the same remote host must be preserved.
+A full-page refresh reloads authentication state, routing, and all tiled connections. A balancing group may select another backend and RDP may open a different remote session. Keep the option disabled and use a specific connection when the same host must be preserved.
 
 ### Mouse response under weak networks
 
@@ -89,7 +89,7 @@ High-frequency mouse movement is coalesced to the latest position at roughly 30 
 
 Chrome, Edge, video, animation, and complex page scrolling inside remote Windows generate substantial RDP display traffic. The patch detects severe backlog and recovers the connection, but cannot remove bottlenecks in the remote host, network, or `guacd` encoder. For the specific Guacamole RDP connection, prefer:
 
-Recovery4 no longer flattens the full live display and generates a thumbnail every five seconds from the sync callback. Thumbnails are still saved after the first connected frame and on disconnect. Per-frame display statistics are disabled by default and enabled with a one-second window only after intentional clicks while responsiveness is checked. This reduces main-thread competition during full repaint bursts such as opening a new remote browser tab.
+Recovery5 retains recovery4's display hot-path optimization: the live sync callback no longer flattens the full display every five seconds for thumbnails, and per-frame statistics are disabled by default and enabled with a one-second window only after intentional clicks. Thumbnails are still saved after the first connected frame and on disconnect.
 
 - `16`-bit color depth;
 - force-lossless disabled;
@@ -105,7 +105,7 @@ A successful build publishes:
 
 ```text
 ghcr.io/trilogys/guacamole_patch:1.6.0
-ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4
+ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
 ghcr.io/trilogys/guacamole_patch:main
 ghcr.io/trilogys/guacamole_patch:sha-<commit>
 ```
@@ -130,7 +130,7 @@ Clone and build:
 git clone https://github.com/trilogys/guacamole_patch.git
 cd guacamole_patch
 
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
 bash ./build.sh
 ```
 
@@ -138,7 +138,7 @@ For a faster troubleshooting build:
 
 ```bash
 MAVEN_ARGUMENTS="-T 1C -Dmaven.test.skip=true" \
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
 bash ./build.sh
 ```
 
@@ -147,14 +147,14 @@ bash ./build.sh
 ## Verify the image
 
 ```bash
-docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery4 \
+docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5 \
   --format '{{index .Config.Labels "io.guacamole.recovery.patch-sha256"}}'
 ```
 
 Expected patch SHA-256:
 
 ```text
-b022cfb268a0c18d812e1dcdc7867ee61554de2e9f02ffe369abce0dff535c89
+c25068f2c99a286fa0530477b92600cc2f90438c69b4ba0437266798db86d051
 ```
 
 ## Acceptance testing

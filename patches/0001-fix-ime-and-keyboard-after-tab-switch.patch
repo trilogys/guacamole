@@ -1,15 +1,7 @@
 diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientController.js b/guacamole/src/main/frontend/src/app/client/controllers/clientController.js
 --- a/guacamole/src/main/frontend/src/app/client/controllers/clientController.js
 +++ b/guacamole/src/main/frontend/src/app/client/controllers/clientController.js
-@@ -24,6 +24,7 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
-         function clientController($scope, $routeParams, $injector) {
- 
-     // Required types
-+    const ClientIdentifier   = $injector.get('ClientIdentifier');
-     const ConnectionGroup    = $injector.get('ConnectionGroup');
-     const ManagedClient      = $injector.get('ManagedClient');
-     const ManagedClientGroup = $injector.get('ManagedClientGroup');
-@@ -34,6 +35,7 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -34,6 +34,7 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
  
      // Required services
      const $location              = $injector.get('$location');
@@ -17,44 +9,43 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
      const authenticationService  = $injector.get('authenticationService');
      const connectionGroupService = $injector.get('connectionGroupService');
      const clipboardService       = $injector.get('clipboardService');
-@@ -94,6 +96,36 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -94,6 +95,20 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
       */
      var DEL_KEY = 0xFFFF;
  
 +    /**
-+     * Initial delay before automatically rebuilding a degraded connection.
-+     * Each consecutive attempt doubles this delay.
++     * Stable time after which the automatic page refresh attempt count resets.
 +     *
 +     * @type Number
 +     */
-+    var AUTO_RECONNECT_DELAY = 5000;
++    var AUTO_REFRESH_RESET_DELAY = 60000;
 +
 +    /**
-+     * Maximum consecutive automatic reconnect attempts per connection.
-+     *
-+     * @type Number
++     * Pending automatic page refresh and stable-period reset timers.
 +     */
-+    var AUTO_RECONNECT_MAX_ATTEMPTS = 2;
-+
-+    /**
-+     * Stable time after which the automatic reconnect attempt count resets.
-+     *
-+     * @type Number
-+     */
-+    var AUTO_RECONNECT_RESET_DELAY = 60000;
-+
-+    /**
-+     * Automatic reconnect attempt counts, pending timers, and reset timers by
-+     * ManagedClient ID.
-+     */
-+    var autoReconnectAttempts = {};
-+    var autoReconnectTimers = {};
-+    var autoReconnectResetTimers = {};
++    var autoRefreshTimer = null;
++    var autoRefreshResetTimer = null;
++    var automaticRefreshPending = false;
 +
      /**
       * Menu-specific properties.
       */
-@@ -144,6 +176,21 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -106,6 +121,14 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+          */
+         shown : false,
+ 
++        /**
++         * Whether confirmed connection failures should trigger a delayed
++         * refresh of the entire current browser page.
++         *
++         * @type Boolean
++         */
++        automaticRefresh : preferenceService.preferences.automaticRefresh === true,
++
+         /**
+          * The currently selected input method. This may be any of the values
+          * defined within preferenceService.inputMethods.
+@@ -144,6 +167,21 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
          $scope.menu.shown = false;
      };
  
@@ -76,7 +67,21 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
      /**
       * Applies any changes to connection parameters made by the user within the
       * Guacamole menu to the given ManagedClient. If no client is supplied,
-@@ -661,6 +708,212 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -454,6 +492,13 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+ 
+     });
+ 
++    // Persist automatic page refresh immediately. The recovery state watcher
++    // below cancels any pending refresh as soon as this is disabled.
++    $scope.$watch('menu.automaticRefresh', function setAutomaticRefresh(enabled) {
++        preferenceService.preferences.automaticRefresh = enabled === true;
++        preferenceService.save();
++    });
++
+     // Update client state/behavior as visibility of the Guacamole menu changes
+     $scope.$watch('menu.shown', function menuVisibilityChanged(menuShown, menuShownPreviousState) {
+ 
+@@ -661,6 +706,181 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
          return _.findIndex($scope.clientGroup.clients, client => client.clientState.tunnelUnstable) !== -1;
      };
  
@@ -90,8 +95,8 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
 +    };
 +
 +    /**
-+     * Returns whether the given client may still be rebuilt following a
-+     * confirmed network or remote-control failure.
++     * Returns whether the given client still represents a page state for
++     * which confirmed network or remote-control failure recovery is useful.
 +     */
 +    var isClientConnectionRecoverable = function isClientConnectionRecoverable(client) {
 +        const state = client.clientState.connectionState;
@@ -101,100 +106,32 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
 +    };
 +
 +    /**
-+     * Returns whether automatically rebuilding the given client preserves its
-+     * target. Re-entering a balancing group may select a different backend,
-+     * and is therefore left as an explicit manual action.
++     * Cancels any pending automatic page refresh.
 +     */
-+    var isAutomaticReconnectSafe = function isAutomaticReconnectSafe(client) {
-+        return ClientIdentifier.fromString(client.id).type
-+            !== ClientIdentifier.Types.CONNECTION_GROUP;
-+    };
-+
-+    /**
-+     * Returns the currently-attached client having the given ID, if any.
-+     */
-+    var getAttachedClient = function getAttachedClient(id) {
-+        if (!$scope.clientGroup)
-+            return null;
-+        return _.find($scope.clientGroup.clients, client => client.id === id);
-+    };
-+
-+    /**
-+     * Cancels a pending automatic reconnect for the given client ID.
-+     */
-+    var cancelAutoReconnect = function cancelAutoReconnect(id) {
-+        if (autoReconnectTimers[id]) {
-+            $timeout.cancel(autoReconnectTimers[id]);
-+            delete autoReconnectTimers[id];
++    var cancelAutoRefresh = function cancelAutoRefresh() {
++        if (autoRefreshTimer) {
++            $timeout.cancel(autoRefreshTimer);
++            autoRefreshTimer = null;
 +        }
-+
-+        const client = getAttachedClient(id);
-+        if (client)
-+            client.autoReconnectPending = false;
++        automaticRefreshPending = false;
 +    };
 +
 +    /**
-+     * Cancels a pending stable-period reset for the given client ID.
++     * Cancels any pending reset of the page refresh loop guard.
 +     */
-+    var cancelAutoReconnectReset = function cancelAutoReconnectReset(id) {
-+        if (autoReconnectResetTimers[id]) {
-+            $timeout.cancel(autoReconnectResetTimers[id]);
-+            delete autoReconnectResetTimers[id];
++    var cancelAutoRefreshReset = function cancelAutoRefreshReset() {
++        if (autoRefreshResetTimer) {
++            $timeout.cancel(autoRefreshResetTimer);
++            autoRefreshResetTimer = null;
 +        }
 +    };
 +
 +    /**
-+     * Schedules the attempt counter to reset after a successful stable period.
++     * Returns whether any current connection has an active file transfer.
 +     */
-+    var scheduleAutoReconnectReset = function scheduleAutoReconnectReset(id) {
-+        cancelAutoReconnectReset(id);
-+
-+        autoReconnectResetTimers[id] = $timeout(function resetAutoReconnectAttempts() {
-+            delete autoReconnectResetTimers[id];
-+
-+            const client = getAttachedClient(id);
-+            if (client && isClientConnectionActive(client)
-+                    && !client.clientState.tunnelUnstable) {
-+                autoReconnectAttempts[id] = 0;
-+            }
-+        }, AUTO_RECONNECT_RESET_DELAY);
-+    };
-+
-+    /**
-+     * Returns whether the given client can be automatically reconnected now.
-+     */
-+    var canAutoReconnect = function canAutoReconnect(client) {
-+        return client.reconnectSuggested
-+            && isClientConnectionRecoverable(client)
-+            && isAutomaticReconnectSafe(client)
-+            && !ManagedClient.hasActiveTransfers(client);
-+    };
-+
-+    /**
-+     * Queues a bounded automatic reconnect for the given degraded client.
-+     */
-+    var queueAutoReconnect = function queueAutoReconnect(client) {
-+        const id = client.id;
-+        const attempts = autoReconnectAttempts[id] || 0;
-+        if (autoReconnectTimers[id] || attempts >= AUTO_RECONNECT_MAX_ATTEMPTS)
-+            return;
-+
-+        const delay = AUTO_RECONNECT_DELAY * Math.pow(2, attempts);
-+        client.autoReconnectPending = true;
-+
-+        autoReconnectTimers[id] = $timeout(function autoReconnectClient() {
-+            delete autoReconnectTimers[id];
-+            client.autoReconnectPending = false;
-+
-+            // The client may have been replaced, recovered without needing a
-+            // rebuild, or started a transfer while this reconnect was pending.
-+            const currentClient = getAttachedClient(id);
-+            if (currentClient !== client || !canAutoReconnect(currentClient))
-+                return;
-+
-+            autoReconnectAttempts[id] = attempts + 1;
-+            guacClientManager.replaceManagedClient(id);
-+        }, delay);
++    var hasActiveTransfers = function hasActiveTransfers() {
++        return $scope.clientGroup && _.findIndex($scope.clientGroup.clients,
++            client => ManagedClient.hasActiveTransfers(client)) !== -1;
 +    };
 +
 +    /**
@@ -205,30 +142,50 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
 +     *     true if at least one client may benefit from being reconnected.
 +     */
 +    $scope.isConnectionRecoveryAvailable = function isConnectionRecoveryAvailable() {
-+        return _.findIndex($scope.clientGroup.clients, client =>
++        return $scope.clientGroup && _.findIndex($scope.clientGroup.clients, client =>
 +            client.reconnectSuggested && isClientConnectionRecoverable(client)) !== -1;
 +    };
 +
 +    /**
-+     * Returns whether an automatic reconnect is currently pending.
++     * Returns whether an automatic full-page refresh is currently pending.
 +     */
-+    $scope.isAutomaticReconnectPending = function isAutomaticReconnectPending() {
-+        return _.findIndex($scope.clientGroup.clients,
-+            client => client.autoReconnectPending) !== -1;
++    $scope.isAutomaticRefreshPending = function isAutomaticRefreshPending() {
++        return automaticRefreshPending;
 +    };
 +
 +    /**
-+     * Replaces all clients which experienced confirmed tunnel instability.
++     * Returns whether the current page can be refreshed automatically now.
 +     */
-+    $scope.reconnectDegradedClients = function reconnectDegradedClients() {
-+        $scope.clientGroup.clients.slice().forEach(client => {
-+            if (client.reconnectSuggested && isClientConnectionRecoverable(client)) {
-+                cancelAutoReconnect(client.id);
-+                cancelAutoReconnectReset(client.id);
-+                autoReconnectAttempts[client.id] = 0;
-+                guacClientManager.replaceManagedClient(client.id);
-+            }
-+        });
++    var canAutoRefresh = function canAutoRefresh() {
++        return $scope.menu.automaticRefresh
++            && $scope.isConnectionRecoveryAvailable()
++            && !hasActiveTransfers()
++            && preferenceService.canAutomaticallyRefresh();
++    };
++
++    /**
++     * Queues one bounded refresh of the entire current browser page.
++     */
++    var queueAutoRefresh = function queueAutoRefresh() {
++        if (autoRefreshTimer || !canAutoRefresh())
++            return;
++
++        automaticRefreshPending = true;
++        autoRefreshTimer = $timeout(function autoRefreshPage() {
++            autoRefreshTimer = null;
++            automaticRefreshPending = false;
++            if (canAutoRefresh())
++                preferenceService.refreshPage(false);
++        }, preferenceService.getAutomaticRefreshDelay());
++    };
++
++    /**
++     * Refreshes the entire current browser page at the user's request.
++     */
++    $scope.refreshPage = function refreshPage() {
++        cancelAutoRefresh();
++        cancelAutoRefreshReset();
++        preferenceService.refreshPage(true);
 +    };
 +
 +    /**
@@ -236,67 +193,86 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
 +     */
 +    $scope.dismissConnectionRecovery = function dismissConnectionRecovery() {
 +        $scope.clientGroup.clients.forEach(client => {
-+            cancelAutoReconnect(client.id);
 +            client.controlUnresponsive = false;
 +            client.reconnectSuggested = false;
 +        });
++        cancelAutoRefresh();
 +    };
 +
-+    // Queue or cancel automatic recovery as tunnel and transfer state changes.
-+    $scope.$watchCollection(function getAutoReconnectState() {
++    /**
++     * Returns whether all current clients have remained active and stable.
++     */
++    var areAllConnectionsStable = function areAllConnectionsStable() {
++        return $scope.clientGroup && $scope.clientGroup.clients.length
++            && _.findIndex($scope.clientGroup.clients, client =>
++                !isClientConnectionActive(client)
++                || client.clientState.tunnelUnstable
++                || client.reconnectSuggested) === -1;
++    };
++
++    /**
++     * Clears the cross-refresh loop guard after one stable minute.
++     */
++    var scheduleAutoRefreshReset = function scheduleAutoRefreshReset() {
++        if (autoRefreshResetTimer)
++            return;
++
++        autoRefreshResetTimer = $timeout(function resetAutoRefreshAttempts() {
++            autoRefreshResetTimer = null;
++            if (areAllConnectionsStable())
++                preferenceService.resetAutomaticRefresh();
++        }, AUTO_REFRESH_RESET_DELAY);
++    };
++
++    // Queue/cancel automatic page refresh as preference, tunnel, and transfer
++    // state changes. Manual recovery remains available independently.
++    $scope.$watchCollection(function getAutoRefreshState() {
 +        if (!$scope.clientGroup)
 +            return [];
 +
-+        return $scope.clientGroup.clients.map(client => [
++        const state = $scope.clientGroup.clients.map(client => [
 +            client.id,
 +            client.reconnectSuggested,
 +            client.clientState.tunnelUnstable,
 +            client.clientState.connectionState,
 +            ManagedClient.hasActiveTransfers(client)
 +        ].join(':'));
-+    }, function autoReconnectStateChanged() {
++
++        state.push('automaticRefresh:' + $scope.menu.automaticRefresh);
++        return state;
++    }, function autoRefreshStateChanged() {
 +
 +        if (!$scope.clientGroup) {
-+            Object.keys(autoReconnectTimers).forEach(cancelAutoReconnect);
-+            Object.keys(autoReconnectResetTimers).forEach(cancelAutoReconnectReset);
++            cancelAutoRefresh();
++            cancelAutoRefreshReset();
 +            return;
 +        }
 +
-+        const candidates = {};
-+        $scope.clientGroup.clients.forEach(client => {
-+            if (canAutoReconnect(client)) {
-+                candidates[client.id] = true;
-+                queueAutoReconnect(client);
-+            }
++        if (canAutoRefresh())
++            queueAutoRefresh();
++        else
++            cancelAutoRefresh();
 +
-+            const attempts = autoReconnectAttempts[client.id] || 0;
-+            if (attempts && isClientConnectionActive(client)
-+                    && !client.clientState.tunnelUnstable) {
-+                if (!autoReconnectResetTimers[client.id])
-+                    scheduleAutoReconnectReset(client.id);
-+            }
-+            else
-+                cancelAutoReconnectReset(client.id);
-+        });
-+
-+        Object.keys(autoReconnectTimers).forEach(id => {
-+            if (!candidates[id])
-+                cancelAutoReconnect(id);
-+        });
++        if (areAllConnectionsStable())
++            scheduleAutoRefreshReset();
++        else
++            cancelAutoRefreshReset();
 +
 +    });
 +
      /**
       * Immediately disconnects all currently-focused clients, if any.
       */
-@@ -669,8 +922,13 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -668,9 +888,15 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+ 
          // Disconnect if client is available
          if ($scope.clientGroup) {
++            cancelAutoRefresh();
++            cancelAutoRefreshReset();
++            preferenceService.resetAutomaticRefresh();
              $scope.clientGroup.clients.forEach(client => {
 -                if (client.clientProperties.focused)
 +                if (client.clientProperties.focused) {
-+                    cancelAutoReconnect(client.id);
-+                    cancelAutoReconnectReset(client.id);
 +                    client.controlUnresponsive = false;
 +                    client.reconnectSuggested = false;
                      client.client.disconnect();
@@ -304,13 +280,13 @@ diff --git a/guacamole/src/main/frontend/src/app/client/controllers/clientContro
              });
          }
  
-@@ -870,6 +1128,10 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
+@@ -870,6 +1096,10 @@ angular.module('client').controller('clientController', ['$scope', '$routeParams
  
      // Clean up when view destroyed
      $scope.$on('$destroy', function clientViewDestroyed() {
 +
-+        Object.keys(autoReconnectTimers).forEach(cancelAutoReconnect);
-+        Object.keys(autoReconnectResetTimers).forEach(cancelAutoReconnectReset);
++        cancelAutoRefresh();
++        cancelAutoRefreshReset();
 +
          setAttachedGroup(null);
  
@@ -454,6 +430,120 @@ diff --git a/guacamole/src/main/frontend/src/app/client/directives/guacClient.js
          // Hide software cursor when mouse leaves display
          mouse.on('mouseout', function() {
              if (!display) return;
+diff --git a/guacamole/src/main/frontend/src/app/client/directives/guacClientNotification.js b/guacamole/src/main/frontend/src/app/client/directives/guacClientNotification.js
+--- a/guacamole/src/main/frontend/src/app/client/directives/guacClientNotification.js
++++ b/guacamole/src/main/frontend/src/app/client/directives/guacClientNotification.js
+@@ -52,8 +52,8 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+         // Required services
+         const $location              = $injector.get('$location');
+         const authenticationService  = $injector.get('authenticationService');
+-        const guacClientManager      = $injector.get('guacClientManager');
+         const guacTranslate          = $injector.get('guacTranslate');
++        const preferenceService      = $injector.get('preferenceService');
+         const requestService         = $injector.get('requestService');
+         const userPageService        = $injector.get('userPageService');
+ 
+@@ -67,10 +67,10 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+         $scope.status = false;
+ 
+         /**
+-         * All error codes for which automatic reconnection is appropriate when a
+-         * client error occurs.
++         * All error codes for which automatic page refresh is appropriate when
++         * a client error occurs.
+          */
+-        const CLIENT_AUTO_RECONNECT = {
++        const CLIENT_AUTO_REFRESH = {
+             0x0200: true,
+             0x0202: true,
+             0x0203: true,
+@@ -81,10 +81,10 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+         };
+ 
+         /**
+-         * All error codes for which automatic reconnection is appropriate when a
+-         * tunnel error occurs.
++         * All error codes for which automatic page refresh is appropriate when
++         * a tunnel error occurs.
+          */
+-        const TUNNEL_AUTO_RECONNECT = {
++        const TUNNEL_AUTO_REFRESH = {
+             0x0200: true,
+             0x0202: true,
+             0x0203: true,
+@@ -129,24 +129,25 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+         }, requestService.WARN);
+ 
+         /**
+-         * Action which replaces the current client with a newly-connected client.
++         * Action which refreshes the entire current browser page.
+          */
+-        const RECONNECT_ACTION = {
+-            name      : "CLIENT.ACTION_RECONNECT",
++        const REFRESH_PAGE_ACTION = {
++            name      : "CLIENT.ACTION_REFRESH_PAGE",
+             className : "reconnect button",
+-            callback  : function reconnectCallback() {
+-                $scope.client = guacClientManager.replaceManagedClient($scope.client.id);
+-                $scope.status = false;
++            callback  : function refreshPageCallback() {
++                preferenceService.refreshPage(true);
+             }
+         };
+ 
+         /**
+-         * The reconnect countdown to display if an error or status warrants an
+-         * automatic, timed reconnect.
++         * The refresh countdown to display if an error or status warrants an
++         * automatic, timed full-page refresh.
+          */
+-        const RECONNECT_COUNTDOWN = {
+-            text: "CLIENT.TEXT_RECONNECT_COUNTDOWN",
+-            callback: RECONNECT_ACTION.callback,
++        const REFRESH_PAGE_COUNTDOWN = {
++            text: "CLIENT.TEXT_REFRESH_PAGE_COUNTDOWN",
++            callback: function automaticRefreshPage() {
++                preferenceService.refreshPage(false);
++            },
+             remaining: 15
+         };
+ 
+@@ -194,9 +195,9 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+             // Build array of available actions
+             let actions;
+             if (NAVIGATE_HOME_ACTION)
+-                actions = [ NAVIGATE_HOME_ACTION, RECONNECT_ACTION, LOGOUT_ACTION ];
++                actions = [ NAVIGATE_HOME_ACTION, REFRESH_PAGE_ACTION, LOGOUT_ACTION ];
+             else
+-                actions = [ RECONNECT_ACTION, LOGOUT_ACTION ];
++                actions = [ REFRESH_PAGE_ACTION, LOGOUT_ACTION ];
+ 
+             // Get any associated status code
+             const status = $scope.client.clientState.statusCode;
+@@ -222,7 +223,11 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+                 const defaultErrorId = errorPrefix + "DEFAULT";
+ 
+                 // Determine whether the reconnect countdown applies
+-                const countdown = (status in CLIENT_AUTO_RECONNECT) ? RECONNECT_COUNTDOWN : null;
++                // Downstream modification: automatic full-page refresh is
++                // opt-in and bounded across reloads. The manual action remains.
++                const countdown = preferenceService.preferences.automaticRefresh
++                    && preferenceService.canAutomaticallyRefresh()
++                    && (status in CLIENT_AUTO_REFRESH) ? REFRESH_PAGE_COUNTDOWN : null;
+ 
+                 // Use the guacTranslate service to determine if there is a translation for
+                 // this error code; if not, use the default
+@@ -251,7 +256,9 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+                 const defaultErrorId = errorPrefix + "DEFAULT";
+ 
+                 // Determine whether the reconnect countdown applies
+-                const countdown = (status in TUNNEL_AUTO_RECONNECT) ? RECONNECT_COUNTDOWN : null;
++                const countdown = preferenceService.preferences.automaticRefresh
++                    && preferenceService.canAutomaticallyRefresh()
++                    && (status in TUNNEL_AUTO_REFRESH) ? REFRESH_PAGE_COUNTDOWN : null;
+ 
+                 // Use the guacTranslate service to determine if there is a translation for
+                 // this error code; if not, use the default
 diff --git a/guacamole/src/main/frontend/src/app/client/directives/guacTiledClients.js b/guacamole/src/main/frontend/src/app/client/directives/guacTiledClients.js
 --- a/guacamole/src/main/frontend/src/app/client/directives/guacTiledClients.js
 +++ b/guacamole/src/main/frontend/src/app/client/directives/guacTiledClients.js
@@ -502,7 +592,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/styles/connection-warnin
 diff --git a/guacamole/src/main/frontend/src/app/client/templates/client.html b/guacamole/src/main/frontend/src/app/client/templates/client.html
 --- a/guacamole/src/main/frontend/src/app/client/templates/client.html
 +++ b/guacamole/src/main/frontend/src/app/client/templates/client.html
-@@ -41,8 +41,27 @@
+@@ -41,8 +41,32 @@
      </div>
  
      <!-- Connection stability warning -->
@@ -514,25 +604,52 @@ diff --git a/guacamole/src/main/frontend/src/app/client/templates/client.html b/
 +            {{'CLIENT.TEXT_CLIENT_STATUS_UNSTABLE' | translate}}
 +        </div>
 +        <div class="message"
-+             ng-if="!isConnectionUnstable() && isAutomaticReconnectPending()">
-+            {{'CLIENT.TEXT_CLIENT_STATUS_RECOVERED_RECONNECTING' | translate}}
++             ng-if="isConnectionUnstable() && isAutomaticRefreshPending()">
++            {{'CLIENT.TEXT_CLIENT_STATUS_RECOVERED_REFRESHING' | translate}}
 +        </div>
 +        <div class="message"
-+             ng-if="!isConnectionUnstable() && !isAutomaticReconnectPending()">
++             ng-if="!isConnectionUnstable() && isAutomaticRefreshPending()">
++            {{'CLIENT.TEXT_CLIENT_STATUS_RECOVERED_REFRESHING' | translate}}
++        </div>
++        <div class="message"
++             ng-if="!isConnectionUnstable() && !isAutomaticRefreshPending()">
 +            {{'CLIENT.TEXT_CLIENT_STATUS_RECOVERED_SLOW' | translate}}
 +        </div>
 +        <div class="actions">
-+            <button class="reconnect" ng-click="reconnectDegradedClients()">
-+                {{'CLIENT.ACTION_RECONNECT' | translate}}
++            <button class="reconnect" ng-click="refreshPage()">
++                {{'CLIENT.ACTION_REFRESH_PAGE' | translate}}
 +            </button>
-+            <button ng-if="!isConnectionUnstable()" ng-click="dismissConnectionRecovery()">
++            <button ng-if="!isConnectionUnstable() || isAutomaticRefreshPending()"
++                    ng-click="dismissConnectionRecovery()">
 +                {{'CLIENT.ACTION_DISMISS_RECOVERY' | translate}}
 +            </button>
 +        </div>
      </div>
      
      <!-- Menu -->
-@@ -133,6 +152,12 @@
+@@ -128,11 +152,34 @@
+                                model-only="true"></guac-form>
+                 </div>
+ 
++                <!-- Connection recovery -->
++                <div class="menu-section" id="connection-recovery-settings">
++                    <h3>{{'CLIENT.SECTION_HEADER_CONNECTION_RECOVERY' | translate}}</h3>
++                    <div class="content">
++                        <div class="choice">
++                            <label>
++                                <input id="automatic-refresh" type="checkbox"
++                                       ng-model="menu.automaticRefresh">
++                                {{'CLIENT.NAME_AUTOMATIC_REFRESH' | translate}}
++                            </label>
++                            <p class="caption">
++                                <label for="automatic-refresh">{{'CLIENT.HELP_AUTOMATIC_REFRESH' | translate}}</label>
++                            </p>
++                        </div>
++                    </div>
++                </div>
++
+                 <!-- Input method -->
+                 <div class="menu-section" id="keyboard-settings">
                      <h3>{{'CLIENT.SECTION_HEADER_INPUT_METHOD' | translate}}</h3>
                      <div class="content">
  
@@ -597,7 +714,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
  
      /**
       * Object which serves as a surrogate interface, encapsulating a Guacamole
-@@ -221,6 +247,29 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -221,6 +247,22 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
           */
          this.clientState = template.clientState || new ManagedClientState();
  
@@ -617,17 +734,10 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
 +         */
 +        this.controlUnresponsive = template.controlUnresponsive || false;
 +
-+        /**
-+         * Whether an automatic reconnect is currently queued for this client.
-+         *
-+         * @type Boolean
-+         */
-+        this.autoReconnectPending = false;
-+
          /**
           * Properties associated with the display and behavior of the Guacamole
           * client.
-@@ -390,9 +439,193 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -390,9 +432,193 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
              tunnel : tunnel
          });
  
@@ -821,7 +931,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
                  ManagedClientState.setConnectionState(managedClient.clientState,
                      ManagedClientState.ConnectionState.TUNNEL_ERROR,
                      status.code);
-@@ -410,28 +643,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -410,28 +636,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
  
          // Update connection state as tunnel state changes
          tunnel.onstatechange = function tunnelStateChanged(state) {
@@ -860,7 +970,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
                          ManagedClientState.setConnectionState(managedClient.clientState,
                              ManagedClientState.ConnectionState.DISCONNECTED);
                          break;
-@@ -538,17 +779,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -538,17 +772,36 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
              });
          };
  
@@ -908,7 +1018,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/types/ManagedClient.js b
              }
  
          };
-@@ -958,6 +1218,24 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
+@@ -958,6 +1211,24 @@ angular.module('client').factory('ManagedClient', ['$rootScope', '$injector',
          return !!(client && client.uploads && client.uploads.length);
      };
  
@@ -1324,6 +1434,187 @@ diff --git a/guacamole/src/main/frontend/src/app/index/controllers/indexControll
  
      }, true);
  
+diff --git a/guacamole/src/main/frontend/src/app/settings/services/preferenceService.js b/guacamole/src/main/frontend/src/app/settings/services/preferenceService.js
+--- a/guacamole/src/main/frontend/src/app/settings/services/preferenceService.js
++++ b/guacamole/src/main/frontend/src/app/settings/services/preferenceService.js
+@@ -119,6 +119,17 @@ angular.module('settings').provider('preferenceService', ['$injector',
+      */
+     this.preferences = {
+ 
++        // Downstream modification: full-page automatic refresh is opt-in so
++        // users can choose between delayed and manual recovery.
++
++        /**
++         * Whether confirmed connection failures should trigger a delayed,
++         * bounded automatic refresh of the current browser page.
++         *
++         * @type Boolean
++         */
++        automaticRefresh : false,
++
+         /**
+          * Whether translation of touch to mouse events should emulate an
+          * absolute pointer device, or a relative pointer device.
+@@ -196,6 +207,135 @@ angular.module('settings').provider('preferenceService', ['$injector',
+          */
+         service.preferences = provider.preferences;
+ 
++        // Downstream modification: retain the automatic refresh loop guard in
++        // browser session storage so it survives the refresh that it controls.
++        var AUTO_REFRESH_STATE_KEY = 'GUAC_AUTO_REFRESH_STATE';
++        var AUTO_REFRESH_DELAY = 5000;
++        var AUTO_REFRESH_MAX_ATTEMPTS = 2;
++        var AUTO_REFRESH_RESET_DELAY = 60000;
++        var automaticRefreshFallbackState = null;
++        var automaticRefreshStorageAvailable = true;
++
++        /**
++         * Returns the browser location represented by the current refresh
++         * state. Attempts for another route must never affect this page.
++         */
++        var getAutomaticRefreshTarget = function getAutomaticRefreshTarget() {
++            return $window.location.pathname
++                + $window.location.search
++                + $window.location.hash;
++        };
++
++        /**
++         * Returns valid automatic refresh state for the current page.
++         */
++        var getAutomaticRefreshState = function getAutomaticRefreshState() {
++            var state = automaticRefreshFallbackState;
++
++            try {
++                var stored = $window.sessionStorage.getItem(AUTO_REFRESH_STATE_KEY);
++                state = stored ? JSON.parse(stored) : null;
++            }
++            catch (e) {
++                // Disable automatic refresh if its cross-reload loop guard
++                // cannot be guaranteed. Manual refresh remains available.
++                automaticRefreshStorageAvailable = false;
++            }
++
++            var now = new Date().getTime();
++            if (!state || state.target !== getAutomaticRefreshTarget()
++                    || typeof state.attempts !== 'number'
++                    || state.attempts < 0
++                    || Math.floor(state.attempts) !== state.attempts
++                    || typeof state.lastAttempt !== 'number'
++                    || state.lastAttempt < 0
++                    || now - state.lastAttempt >= AUTO_REFRESH_RESET_DELAY) {
++                state = {
++                    target : getAutomaticRefreshTarget(),
++                    attempts : 0,
++                    lastAttempt : 0
++                };
++            }
++
++            return state;
++        };
++
++        /**
++         * Persists automatic refresh state for the current browser tab.
++         */
++        var setAutomaticRefreshState = function setAutomaticRefreshState(state) {
++            automaticRefreshFallbackState = state;
++            try {
++                $window.sessionStorage.setItem(
++                    AUTO_REFRESH_STATE_KEY, JSON.stringify(state));
++                return true;
++            }
++            catch (e) {
++                automaticRefreshStorageAvailable = false;
++                return false;
++            }
++        };
++
++        /**
++         * Returns whether another automatic page refresh is allowed.
++         */
++        service.canAutomaticallyRefresh = function canAutomaticallyRefresh() {
++            var state = getAutomaticRefreshState();
++            return automaticRefreshStorageAvailable
++                && state.attempts < AUTO_REFRESH_MAX_ATTEMPTS;
++        };
++
++        /**
++         * Returns the bounded delay before the next automatic page refresh.
++         */
++        service.getAutomaticRefreshDelay = function getAutomaticRefreshDelay() {
++            return AUTO_REFRESH_DELAY * Math.pow(2,
++                getAutomaticRefreshState().attempts);
++        };
++
++        /**
++         * Clears the automatic page refresh loop guard after stable operation.
++         */
++        service.resetAutomaticRefresh = function resetAutomaticRefresh() {
++            automaticRefreshFallbackState = null;
++            try {
++                $window.sessionStorage.removeItem(AUTO_REFRESH_STATE_KEY);
++            }
++            catch (e) {
++                // The in-memory fallback has already been cleared.
++            }
++        };
++
++        /**
++         * Refreshes the current browser page, recording automatic attempts or
++         * clearing the guard for an explicit manual refresh.
++         *
++         * @param {Boolean} manual
++         *     Whether the user explicitly requested this refresh.
++         *
++         * @returns {Boolean}
++         *     true if the page refresh was requested, false if the automatic
++         *     refresh limit has already been reached.
++         */
++        service.refreshPage = function refreshPage(manual) {
++            var state = getAutomaticRefreshState();
++
++            if (manual)
++                service.resetAutomaticRefresh();
++            else {
++                if (!automaticRefreshStorageAvailable
++                        || state.attempts >= AUTO_REFRESH_MAX_ATTEMPTS)
++                    return false;
++                state.attempts++;
++                state.lastAttempt = new Date().getTime();
++                if (!setAutomaticRefreshState(state))
++                    return false;
++            }
++
++            $window.location.reload();
++            return true;
++        };
++
+         /**
+          * Persists the current values of all preferences, if possible.
+          */
+diff --git a/guacamole/src/main/frontend/src/app/settings/templates/settingsPreferences.html b/guacamole/src/main/frontend/src/app/settings/templates/settingsPreferences.html
+--- a/guacamole/src/main/frontend/src/app/settings/templates/settingsPreferences.html
++++ b/guacamole/src/main/frontend/src/app/settings/templates/settingsPreferences.html
+@@ -24,6 +24,20 @@
+         </div>
+     </div>
+ 
++    <!-- Connection recovery -->
++    <h2 class="header">{{'SETTINGS_PREFERENCES.SECTION_HEADER_CONNECTION_RECOVERY' | translate}}</h2>
++    <div class="settings section connection-recovery">
++        <p>{{'SETTINGS_PREFERENCES.HELP_CONNECTION_RECOVERY' | translate}}</p>
++        <div class="form">
++            <table class="fields">
++                <tr>
++                    <th>{{'SETTINGS_PREFERENCES.FIELD_HEADER_AUTOMATIC_REFRESH' | translate}}</th>
++                    <td><input ng-model="preferences.automaticRefresh" type="checkbox"/></td>
++                </tr>
++            </table>
++        </div>
++    </div>
++
+     <!-- Password update -->
+     <h2 class="header" ng-show="canUpdateSelf">{{'SETTINGS_PREFERENCES.SECTION_HEADER_UPDATE_PASSWORD' | translate}}</h2>
+     <div class="settings section update-password" ng-show="canUpdateSelf">
 diff --git a/guacamole/src/main/frontend/src/app/textInput/directives/guacTextInput.js b/guacamole/src/main/frontend/src/app/textInput/directives/guacTextInput.js
 --- a/guacamole/src/main/frontend/src/app/textInput/directives/guacTextInput.js
 +++ b/guacamole/src/main/frontend/src/app/textInput/directives/guacTextInput.js
@@ -1527,15 +1818,16 @@ diff --git a/guacamole/src/main/frontend/src/app/textInput/directives/guacTextIn
 diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/src/main/frontend/src/translations/en.json
 --- a/guacamole/src/main/frontend/src/translations/en.json
 +++ b/guacamole/src/main/frontend/src/translations/en.json
-@@ -74,6 +74,7 @@
+@@ -74,6 +74,8 @@
          "ACTION_NAVIGATE_BACK"             : "@:APP.ACTION_NAVIGATE_BACK",
          "ACTION_NAVIGATE_HOME"             : "@:APP.ACTION_NAVIGATE_HOME",
          "ACTION_RECONNECT"                 : "Reconnect",
-+        "ACTION_DISMISS_RECOVERY"          : "Keep current session",
++        "ACTION_DISMISS_RECOVERY"          : "Do not refresh",
++        "ACTION_REFRESH_PAGE"              : "Refresh page",
          "ACTION_SAVE_FILE"                 : "@:APP.ACTION_SAVE",
          "ACTION_SHARE"                     : "@:APP.ACTION_SHARE",
          "ACTION_SHOW_CLIPBOARD"            : "Click to view clipboard contents.",
-@@ -124,10 +125,13 @@
+@@ -124,10 +126,14 @@
  
          "FIELD_PLACEHOLDER_FILTER" : "@:APP.FIELD_PLACEHOLDER_FILTER",
  
@@ -1546,30 +1838,73 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "HELP_INPUT_METHOD_OSK"    : "Display and accept input from the built-in Guacamole on-screen keyboard. The on-screen keyboard allows typing of key combinations that may otherwise be impossible (such as Ctrl-Alt-Del).",
          "HELP_INPUT_METHOD_TEXT"   : "Allow typing of text, and emulate keyboard events based on the typed text. This is necessary for devices such as mobile phones that lack a physical keyboard.",
 +        "HELP_RECOVER_KEYBOARD"    : "Reset and recapture keyboard and IME input without refreshing. You can also press Ctrl-Alt-K.",
++        "HELP_AUTOMATIC_REFRESH"   : "After a confirmed network or control failure, wait briefly and refresh this entire page automatically. If disabled, use Refresh page in the lower-right warning. A full refresh may open a different backend or remote session.",
          "HELP_MOUSE_MODE"          : "Determines how the remote mouse behaves with respect to touches.",
          "HELP_MOUSE_MODE_ABSOLUTE" : "Tap to click. The click occurs at the location of the touch.",
          "HELP_MOUSE_MODE_RELATIVE" : "Drag to move the mouse pointer and tap to click. The click occurs at the location of the pointer.",
-@@ -164,6 +168,8 @@
+@@ -147,9 +153,11 @@
+         "NAME_KEY_TAB"             : "Tab",
+         "NAME_MOUSE_MODE_ABSOLUTE" : "Touchscreen",
+         "NAME_MOUSE_MODE_RELATIVE" : "Touchpad",
++        "NAME_AUTOMATIC_REFRESH"   : "Delayed automatic page refresh",
+ 
+         "SECTION_HEADER_CLIENT_MESSAGES" : "Messages",
+         "SECTION_HEADER_CLIPBOARD"       : "Clipboard",
++        "SECTION_HEADER_CONNECTION_RECOVERY" : "Connection recovery",
+         "SECTION_HEADER_DEVICES"         : "Devices",
+         "SECTION_HEADER_DISPLAY"         : "Display",
+         "SECTION_HEADER_FILE_TRANSFERS"  : "File Transfers",
+@@ -164,10 +172,13 @@
          "TEXT_CLIENT_STATUS_CONNECTING"   : "Connecting to Guacamole...",
          "TEXT_CLIENT_STATUS_DISCONNECTED" : "You have been disconnected.",
          "TEXT_CLIENT_STATUS_UNSTABLE"     : "The network connection to the Guacamole server appears unstable.",
-+        "TEXT_CLIENT_STATUS_RECOVERED_SLOW" : "The display or controls may be unresponsive. Reconnect this session to recover.",
-+        "TEXT_CLIENT_STATUS_RECOVERED_RECONNECTING" : "This session appears unresponsive and will reconnect automatically.",
++        "TEXT_CLIENT_STATUS_RECOVERED_SLOW" : "The display or controls may be unresponsive. Refresh this page to recover.",
++        "TEXT_CLIENT_STATUS_RECOVERED_REFRESHING" : "This page will refresh automatically after a short delay.",
          "TEXT_CLIENT_STATUS_WAITING"      : "Connected to Guacamole. Waiting for response...",
          "TEXT_USER_JOINED"                : "{USERNAME} has joined the connection.",
          "TEXT_USER_LEFT"                  : "{USERNAME} has left the connection.",
+         "TEXT_RECONNECT_COUNTDOWN"        : "Reconnecting in {REMAINING} {REMAINING, plural, one{second} other{seconds}}...",
++        "TEXT_REFRESH_PAGE_COUNTDOWN"     : "Refreshing this page in {REMAINING} {REMAINING, plural, one{second} other{seconds}}...",
+         "TEXT_FILE_TRANSFER_PROGRESS"     : "{PROGRESS} {UNIT, select, b{B} kb{KB} mb{MB} gb{GB} other{}}",
+ 
+         "URL_OSK_LAYOUT" : "layouts/en-us-qwerty.json"
+@@ -1077,6 +1088,7 @@
+         "ERROR_PASSWORD_MISMATCH" : "@:APP.ERROR_PASSWORD_MISMATCH",
+ 
+         "FIELD_HEADER_LANGUAGE"                  : "Display language:",
++        "FIELD_HEADER_AUTOMATIC_REFRESH"         : "Delayed automatic page refresh:",
+         "FIELD_HEADER_NUMBER_RECENT_CONNECTIONS" : "Number of Recent Connections to show:",
+         "FIELD_HEADER_PASSWORD"                  : "Password:",
+         "FIELD_HEADER_PASSWORD_OLD"              : "Current Password:",
+@@ -1087,6 +1099,7 @@
+         "FIELD_HEADER_USERNAME"                  : "Username:",
+         
+         "HELP_APPEARANCE"           : "Here you can enable or disable whether the \"Recent Connections\" section is shown on the home screen, and adjust the number of recent connections included.",
++        "HELP_CONNECTION_RECOVERY"  : "When enabled, confirmed network or control failures refresh the entire current page after a short delay. When disabled, use the lower-right manual action. Full refresh may select another backend or remote session.",
+         "HELP_DEFAULT_INPUT_METHOD" : "The default input method determines how keyboard events are received by Guacamole. Changing this setting may be necessary when using a mobile device, or when typing through an IME. This setting can be overridden on a per-connection basis within the Guacamole menu.",
+         "HELP_DEFAULT_MOUSE_MODE"   : "The default mouse emulation mode determines how the remote mouse will behave in new connections with respect to touches. This setting can be overridden on a per-connection basis within the Guacamole menu.",
+         "HELP_INPUT_METHOD_NONE"    : "@:CLIENT.HELP_INPUT_METHOD_NONE",
+@@ -1105,6 +1118,7 @@
+         "NAME_INPUT_METHOD_TEXT" : "@:CLIENT.NAME_INPUT_METHOD_TEXT",
+ 
+         "SECTION_HEADER_APPEARANCE"           : "Appearance",
++        "SECTION_HEADER_CONNECTION_RECOVERY"  : "Connection Recovery",
+         "SECTION_HEADER_DEFAULT_INPUT_METHOD" : "Default Input Method",
+         "SECTION_HEADER_DEFAULT_MOUSE_MODE"   : "Default Mouse Emulation Mode",
+         "SECTION_HEADER_UPDATE_PASSWORD"      : "Change Password"
 diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/src/main/frontend/src/translations/zh.json
 --- a/guacamole/src/main/frontend/src/translations/zh.json
 +++ b/guacamole/src/main/frontend/src/translations/zh.json
-@@ -70,6 +70,7 @@
+@@ -70,6 +70,8 @@
          "ACTION_NAVIGATE_BACK"             : "@:APP.ACTION_NAVIGATE_BACK",
          "ACTION_NAVIGATE_HOME"             : "@:APP.ACTION_NAVIGATE_HOME",
          "ACTION_RECONNECT"                 : "重新连接",
-+        "ACTION_DISMISS_RECOVERY"          : "保留当前连接",
++        "ACTION_DISMISS_RECOVERY"          : "暂不刷新",
++        "ACTION_REFRESH_PAGE"              : "刷新页面",
          "ACTION_SAVE_FILE"                 : "@:APP.ACTION_SAVE",
          "ACTION_SHARE"                     : "@:APP.ACTION_SHARE",
          "ACTION_SHOW_CLIPBOARD"            : "点击以查看剪贴板内容。",
-@@ -120,10 +121,13 @@
+@@ -120,10 +122,14 @@
  
          "FIELD_PLACEHOLDER_FILTER" : "@:APP.FIELD_PLACEHOLDER_FILTER",
  
@@ -1580,15 +1915,57 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "HELP_INPUT_METHOD_OSK"    : "显示并从内建的 Guacamole 屏幕键盘接受输入。屏幕键盘可以输入平常无法输入的按键组合（如 Ctrl-Alt-Del 等）。",
          "HELP_INPUT_METHOD_TEXT"   : "允许输入文本，并根据所输入的文本模拟键盘事件。可用于没有物理键盘的设备，如手机等。",
 +        "HELP_RECOVER_KEYBOARD"    : "无需刷新即可重置并重新捕获键盘和输入法。也可按 Ctrl-Alt-K。",
++        "HELP_AUTOMATIC_REFRESH"   : "确认网络或控制失效后，短暂等待并自动刷新整个页面。关闭时请使用右下角的“刷新页面”。整页刷新可能打开不同的后端或远程会话。",
          "HELP_MOUSE_MODE"          : "设置远程电脑上的鼠标对触控行为的反应。",
          "HELP_MOUSE_MODE_ABSOLUTE" : "点击时立即触发按键。在点击的位置触发鼠标按键事件。",
          "HELP_MOUSE_MODE_RELATIVE" : "拖拽时移动鼠标，再点击时触发按键。在鼠标当前所在的位置触发按键事件。",
-@@ -160,6 +164,8 @@
+@@ -143,9 +149,11 @@
+         "NAME_KEY_TAB"             : "Tab",
+         "NAME_MOUSE_MODE_ABSOLUTE" : "触摸屏",
+         "NAME_MOUSE_MODE_RELATIVE" : "触控板",
++        "NAME_AUTOMATIC_REFRESH"   : "延迟自动刷新整个页面",
+ 
+         "SECTION_HEADER_CLIENT_MESSAGES" : "消息",
+         "SECTION_HEADER_CLIPBOARD"       : "剪贴板",
++        "SECTION_HEADER_CONNECTION_RECOVERY" : "连接恢复",
+         "SECTION_HEADER_DEVICES"         : "设备",
+         "SECTION_HEADER_DISPLAY"         : "显示",
+         "SECTION_HEADER_FILE_TRANSFERS"  : "文件传输",
+@@ -160,10 +168,13 @@
          "TEXT_CLIENT_STATUS_CONNECTING"   : "正在连接 Guacamole...",
          "TEXT_CLIENT_STATUS_DISCONNECTED" : "您的连接已断开。",
          "TEXT_CLIENT_STATUS_UNSTABLE"     : "到 Guacamole 服务器的网络连接似乎不太稳定。",
-+        "TEXT_CLIENT_STATUS_RECOVERED_SLOW" : "画面或控制可能仍然无响应，请重新连接当前会话。",
-+        "TEXT_CLIENT_STATUS_RECOVERED_RECONNECTING" : "当前会话可能无响应，系统将自动重新连接。",
++        "TEXT_CLIENT_STATUS_RECOVERED_SLOW" : "画面或控制可能仍然无响应，请刷新当前页面。",
++        "TEXT_CLIENT_STATUS_RECOVERED_REFRESHING" : "页面将在短暂延迟后自动刷新。",
          "TEXT_CLIENT_STATUS_WAITING"      : "已连接到 Guacamole。正在等待应答...",
          "TEXT_USER_JOINED"                : "用户 {USERNAME} 已加入连接。",
          "TEXT_USER_LEFT"                  : "用户 {USERNAME} 断开了连接。",
+         "TEXT_RECONNECT_COUNTDOWN"        : "在 {REMAINING} 秒后重连...",
++        "TEXT_REFRESH_PAGE_COUNTDOWN"     : "将在 {REMAINING} 秒后刷新整个页面...",
+         "TEXT_FILE_TRANSFER_PROGRESS"     : "{PROGRESS} {UNIT, select, b{B} kb{KB} mb{MB} gb{GB} other{}}",
+ 
+         "URL_OSK_LAYOUT" : "layouts/en-us-qwerty.json"
+@@ -1011,6 +1022,7 @@
+         "ERROR_PASSWORD_MISMATCH" : "@:APP.ERROR_PASSWORD_MISMATCH",
+ 
+         "FIELD_HEADER_LANGUAGE"           : "界面语言：",
++        "FIELD_HEADER_AUTOMATIC_REFRESH"  : "延迟自动刷新整个页面：",
+         "FIELD_HEADER_PASSWORD"           : "密码：",
+         "FIELD_HEADER_PASSWORD_OLD"       : "当前密码：",
+         "FIELD_HEADER_PASSWORD_NEW"       : "新密码：",
+@@ -1018,6 +1030,7 @@
+         "FIELD_HEADER_TIMEZONE"           : "时区：",
+         "FIELD_HEADER_USERNAME"           : "用户名：",
+         
++        "HELP_CONNECTION_RECOVERY"  : "开启后，确认网络或控制失效时会延迟刷新整个当前页面；关闭后请使用右下角的手动按钮。整页刷新可能重新选择后端或远程会话。",
+         "HELP_DEFAULT_INPUT_METHOD" : "默认输入法决定了 Guacamole 如何接收键盘事件。当使用移动设备或使用 IME 输入时，有可能需要更改设置。本设置可在 Guacamole 菜单内被单个连接的设定覆盖。",
+         "HELP_DEFAULT_MOUSE_MODE"   : "默认鼠标模拟方式决定了新连接内的远程鼠标如何响应屏幕触控。本设置可在 Guacamole 菜单内被单个连接的设定覆盖。",
+         "HELP_INPUT_METHOD_NONE"    : "@:CLIENT.HELP_INPUT_METHOD_NONE",
+@@ -1036,6 +1049,7 @@
+         "NAME_INPUT_METHOD_TEXT" : "@:CLIENT.NAME_INPUT_METHOD_TEXT",
+ 
+         "SECTION_HEADER_DEFAULT_INPUT_METHOD" : "缺省输入法",
++        "SECTION_HEADER_CONNECTION_RECOVERY"  : "连接恢复",
+         "SECTION_HEADER_DEFAULT_MOUSE_MODE"   : "缺省鼠标模拟方式",
+         "SECTION_HEADER_UPDATE_PASSWORD"      : "更改密码"
+ 
