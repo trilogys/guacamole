@@ -11,7 +11,7 @@
 拉取已经构建好的镜像：
 
 ```bash
-docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ```
 
 在 Docker Compose 中使用：
@@ -19,7 +19,7 @@ docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
 ```yaml
 services:
   guacamole:
-    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ```
 
 只更新 Guacamole Web 容器：
@@ -35,8 +35,8 @@ Docker 会复用没有变化的镜像层，后续拉取通常只下载发生变�
 
 ## 镜像标签
 
-- `1.6.0-recovery5`：本补丁包对应的当前具名恢复版本。
-- `1.6.0-recovery4`：保留用于回滚的上一恢复版本。
+- `1.6.0-recovery6`：本补丁包对应的当前具名恢复版本。
+- `1.6.0-recovery5`：保留用于回滚的上一恢复版本。
 - `1.6.0`：当前滚动发布镜像，每次正式构建都会更新这个标签。
 - `main`：由 `main` 分支最新代码构建。
 - `sha-<commit>`：对应特定源码提交的固定标签，适合精确部署和回滚。
@@ -81,6 +81,12 @@ Guacamole 原本在大约 1.5 秒未收到隧道数据后就把连接标记为�
 
 整页刷新会重新加载登录态、路由和所有平铺连接；负载均衡连接组可能重新选择后端，RDP 也可能打开不同的远程会话。若必须保持同一台主机，请保持开关关闭并优先使用具体连接。
 
+recovery6 在刷新前会使用 `Cache-Control: no-cache` 重新验证当前文档，清除 Guacamole 的旧构建刷新锁，并确保请求成功、失败或超时后只重载一次。连接侧边菜单始终提供“刷新页面”；等待远程首帧时的状态窗口也提供相同操作。
+
+### 登录后远程画布黑屏
+
+若 Guacamole 登录和菜单正常、只有远程画布黑屏，优先在侧边菜单执行“刷新页面”。若无效，请重启 `guacd`，并将连接中的颜色深度、DPI 留空，“禁用 GFX”“强制无损”及三个“禁用缓存”选项全部取消勾选。这些连接参数保存在数据库中，回退 Web 镜像不会自动恢复。
+
 ### 弱网下的鼠标响应
 
 高频鼠标移动会以大约 30 Hz 合并为最新坐标。按下、松开、右键、滚轮和拖拽结束事件会先刷新最后坐标并立即发送，避免点击排在过期移动事件之后。连接被替换时会丢弃旧连接尚未发送的移动。
@@ -89,7 +95,7 @@ Guacamole 原本在大约 1.5 秒未收到隧道数据后就把连接标记为�
 
 远程 Windows 中打开 Chrome、Edge、视频、动画或滚动复杂网页会产生大量 RDP 画面更新。补丁可以识别严重积压并恢复连接，但不能消除远端主机、网络带宽或 `guacd` 编码能力不足。建议在 Guacamole 的具体 RDP 连接中使用：
 
-recovery5 保留 recovery4 的画面热路径优化：不再从实时同步回调中每 5 秒展开完整画布并生成缩略图；逐帧显示统计默认关闭，仅在用户点击后临时启用 1 秒窗口。缩略图仍会在首次连接和断开时保存。
+recovery6 保留 recovery4 的画面热路径优化：不再从实时同步回调中每 5 秒展开完整画布并生成缩略图；逐帧显示统计默认关闭，仅在用户点击后临时启用 1 秒窗口。缩略图仍会在首次连接和断开时保存。
 
 - 颜色深度设为 `16`；
 - 不启用“强制无损”；
@@ -105,7 +111,7 @@ recovery5 保留 recovery4 的画面热路径优化：不再从实时同步回�
 
 ```text
 ghcr.io/trilogys/guacamole_patch:1.6.0
-ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ghcr.io/trilogys/guacamole_patch:main
 ghcr.io/trilogys/guacamole_patch:sha-<commit>
 ```
@@ -130,7 +136,7 @@ mktemp
 git clone https://github.com/trilogys/guacamole_patch.git
 cd guacamole_patch
 
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6" \
 bash ./build.sh
 ```
 
@@ -138,7 +144,7 @@ bash ./build.sh
 
 ```bash
 MAVEN_ARGUMENTS="-T 1C -Dmaven.test.skip=true" \
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6" \
 bash ./build.sh
 ```
 
@@ -147,14 +153,14 @@ bash ./build.sh
 ## 验证镜像
 
 ```bash
-docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5 \
+docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6 \
   --format '{{index .Config.Labels "io.guacamole.recovery.patch-sha256"}}'
 ```
 
 预期补丁 SHA-256：
 
 ```text
-c25068f2c99a286fa0530477b92600cc2f90438c69b4ba0437266798db86d051
+0345d83616eefb0c23c6c8aad328739260beeb2bf0f0d645fc436d4f87f4de5f
 ```
 
 ## 验收测试

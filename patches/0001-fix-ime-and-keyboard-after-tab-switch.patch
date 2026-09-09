@@ -520,7 +520,17 @@ diff --git a/guacamole/src/main/frontend/src/app/client/directives/guacClientNot
  
              // Get any associated status code
              const status = $scope.client.clientState.statusCode;
-@@ -222,7 +223,11 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+@@ -209,7 +210,8 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+                     title: "CLIENT.DIALOG_HEADER_CONNECTING",
+                     text: {
+                         key : "CLIENT.TEXT_CLIENT_STATUS_" + connectionState.toUpperCase()
+-                    }
++                    },
++                    actions : [ REFRESH_PAGE_ACTION ]
+                 };
+             }
+ 
+@@ -222,7 +224,11 @@ angular.module('client').directive('guacClientNotification', [function guacClien
                  const defaultErrorId = errorPrefix + "DEFAULT";
  
                  // Determine whether the reconnect countdown applies
@@ -533,7 +543,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/directives/guacClientNot
  
                  // Use the guacTranslate service to determine if there is a translation for
                  // this error code; if not, use the default
-@@ -251,7 +256,9 @@ angular.module('client').directive('guacClientNotification', [function guacClien
+@@ -251,7 +257,9 @@ angular.module('client').directive('guacClientNotification', [function guacClien
                  const defaultErrorId = errorPrefix + "DEFAULT";
  
                  // Determine whether the reconnect countdown applies
@@ -627,7 +637,7 @@ diff --git a/guacamole/src/main/frontend/src/app/client/templates/client.html b/
      </div>
      
      <!-- Menu -->
-@@ -128,11 +152,34 @@
+@@ -128,11 +152,40 @@
                                 model-only="true"></guac-form>
                  </div>
  
@@ -644,6 +654,12 @@ diff --git a/guacamole/src/main/frontend/src/app/client/templates/client.html b/
 +                            <p class="caption">
 +                                <label for="automatic-refresh">{{'CLIENT.HELP_AUTOMATIC_REFRESH' | translate}}</label>
 +                            </p>
++                        </div>
++                        <div class="choice">
++                            <button class="button" ng-click="refreshPage()">
++                                {{'CLIENT.ACTION_REFRESH_PAGE' | translate}}
++                            </button>
++                            <p class="caption">{{'CLIENT.HELP_REFRESH_PAGE_NOW' | translate}}</p>
 +                        </div>
 +                    </div>
 +                </div>
@@ -1455,7 +1471,7 @@ diff --git a/guacamole/src/main/frontend/src/app/settings/services/preferenceSer
          /**
           * Whether translation of touch to mouse events should emulate an
           * absolute pointer device, or a relative pointer device.
-@@ -196,6 +207,135 @@ angular.module('settings').provider('preferenceService', ['$injector',
+@@ -196,6 +207,182 @@ angular.module('settings').provider('preferenceService', ['$injector',
           */
          service.preferences = provider.preferences;
  
@@ -1559,6 +1575,53 @@ diff --git a/guacamole/src/main/frontend/src/app/settings/services/preferenceSer
 +        };
 +
 +        /**
++         * Revalidates the current document before reloading, avoiding a mixed
++         * frontend when an image upgrade or rollback leaves stale HTML or
++         * JavaScript in an intermediary/browser cache.
++         */
++        var reloadCurrentPage = function reloadCurrentPage() {
++            var reloaded = false;
++            var reloadFallback = null;
++
++            var reload = function reload() {
++                if (reloaded)
++                    return;
++                reloaded = true;
++                if (reloadFallback !== null)
++                    $window.clearTimeout(reloadFallback);
++                $window.location.reload(true);
++            };
++
++            // Allow Guacamole's built-in build identifier check to perform a
++            // fresh cache recovery attempt after upgrades and rollbacks.
++            try {
++                $window.sessionStorage.removeItem('reloadedFor');
++            }
++            catch (e) {
++                // Cache revalidation below remains available.
++            }
++
++            try {
++                var request = new $window.XMLHttpRequest();
++                request.open('GET', $window.location.href, true);
++                request.setRequestHeader('Cache-Control', 'no-cache');
++                request.setRequestHeader('Pragma', 'no-cache');
++                request.timeout = 3000;
++                request.onreadystatechange = function pageRevalidated() {
++                    if (request.readyState === $window.XMLHttpRequest.DONE)
++                        reload();
++                };
++                request.onerror = reload;
++                request.ontimeout = reload;
++                request.send();
++                reloadFallback = $window.setTimeout(reload, 5000);
++            }
++            catch (e) {
++                reload();
++            }
++        };
++
++        /**
 +         * Refreshes the current browser page, recording automatic attempts or
 +         * clearing the guard for an explicit manual refresh.
 +         *
@@ -1584,7 +1647,7 @@ diff --git a/guacamole/src/main/frontend/src/app/settings/services/preferenceSer
 +                    return false;
 +            }
 +
-+            $window.location.reload();
++            reloadCurrentPage();
 +            return true;
 +        };
 +
@@ -1827,7 +1890,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "ACTION_SAVE_FILE"                 : "@:APP.ACTION_SAVE",
          "ACTION_SHARE"                     : "@:APP.ACTION_SHARE",
          "ACTION_SHOW_CLIPBOARD"            : "Click to view clipboard contents.",
-@@ -124,10 +126,14 @@
+@@ -124,10 +126,15 @@
  
          "FIELD_PLACEHOLDER_FILTER" : "@:APP.FIELD_PLACEHOLDER_FILTER",
  
@@ -1838,11 +1901,12 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "HELP_INPUT_METHOD_OSK"    : "Display and accept input from the built-in Guacamole on-screen keyboard. The on-screen keyboard allows typing of key combinations that may otherwise be impossible (such as Ctrl-Alt-Del).",
          "HELP_INPUT_METHOD_TEXT"   : "Allow typing of text, and emulate keyboard events based on the typed text. This is necessary for devices such as mobile phones that lack a physical keyboard.",
 +        "HELP_RECOVER_KEYBOARD"    : "Reset and recapture keyboard and IME input without refreshing. You can also press Ctrl-Alt-K.",
++        "HELP_REFRESH_PAGE_NOW"    : "Reload the complete Guacamole page after revalidating cached frontend files. Use this when the remote display remains black or never finishes opening.",
 +        "HELP_AUTOMATIC_REFRESH"   : "After a confirmed network or control failure, wait briefly and refresh this entire page automatically. If disabled, use Refresh page in the lower-right warning. A full refresh may open a different backend or remote session.",
          "HELP_MOUSE_MODE"          : "Determines how the remote mouse behaves with respect to touches.",
          "HELP_MOUSE_MODE_ABSOLUTE" : "Tap to click. The click occurs at the location of the touch.",
          "HELP_MOUSE_MODE_RELATIVE" : "Drag to move the mouse pointer and tap to click. The click occurs at the location of the pointer.",
-@@ -147,9 +153,11 @@
+@@ -147,9 +154,11 @@
          "NAME_KEY_TAB"             : "Tab",
          "NAME_MOUSE_MODE_ABSOLUTE" : "Touchscreen",
          "NAME_MOUSE_MODE_RELATIVE" : "Touchpad",
@@ -1854,7 +1918,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "SECTION_HEADER_DEVICES"         : "Devices",
          "SECTION_HEADER_DISPLAY"         : "Display",
          "SECTION_HEADER_FILE_TRANSFERS"  : "File Transfers",
-@@ -164,10 +172,13 @@
+@@ -164,10 +173,13 @@
          "TEXT_CLIENT_STATUS_CONNECTING"   : "Connecting to Guacamole...",
          "TEXT_CLIENT_STATUS_DISCONNECTED" : "You have been disconnected.",
          "TEXT_CLIENT_STATUS_UNSTABLE"     : "The network connection to the Guacamole server appears unstable.",
@@ -1868,7 +1932,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "TEXT_FILE_TRANSFER_PROGRESS"     : "{PROGRESS} {UNIT, select, b{B} kb{KB} mb{MB} gb{GB} other{}}",
  
          "URL_OSK_LAYOUT" : "layouts/en-us-qwerty.json"
-@@ -1077,6 +1088,7 @@
+@@ -1077,6 +1089,7 @@
          "ERROR_PASSWORD_MISMATCH" : "@:APP.ERROR_PASSWORD_MISMATCH",
  
          "FIELD_HEADER_LANGUAGE"                  : "Display language:",
@@ -1876,7 +1940,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "FIELD_HEADER_NUMBER_RECENT_CONNECTIONS" : "Number of Recent Connections to show:",
          "FIELD_HEADER_PASSWORD"                  : "Password:",
          "FIELD_HEADER_PASSWORD_OLD"              : "Current Password:",
-@@ -1087,6 +1099,7 @@
+@@ -1087,6 +1100,7 @@
          "FIELD_HEADER_USERNAME"                  : "Username:",
          
          "HELP_APPEARANCE"           : "Here you can enable or disable whether the \"Recent Connections\" section is shown on the home screen, and adjust the number of recent connections included.",
@@ -1884,7 +1948,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/en.json b/guacamole/sr
          "HELP_DEFAULT_INPUT_METHOD" : "The default input method determines how keyboard events are received by Guacamole. Changing this setting may be necessary when using a mobile device, or when typing through an IME. This setting can be overridden on a per-connection basis within the Guacamole menu.",
          "HELP_DEFAULT_MOUSE_MODE"   : "The default mouse emulation mode determines how the remote mouse will behave in new connections with respect to touches. This setting can be overridden on a per-connection basis within the Guacamole menu.",
          "HELP_INPUT_METHOD_NONE"    : "@:CLIENT.HELP_INPUT_METHOD_NONE",
-@@ -1105,6 +1118,7 @@
+@@ -1105,6 +1119,7 @@
          "NAME_INPUT_METHOD_TEXT" : "@:CLIENT.NAME_INPUT_METHOD_TEXT",
  
          "SECTION_HEADER_APPEARANCE"           : "Appearance",
@@ -1904,7 +1968,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "ACTION_SAVE_FILE"                 : "@:APP.ACTION_SAVE",
          "ACTION_SHARE"                     : "@:APP.ACTION_SHARE",
          "ACTION_SHOW_CLIPBOARD"            : "点击以查看剪贴板内容。",
-@@ -120,10 +122,14 @@
+@@ -120,10 +122,15 @@
  
          "FIELD_PLACEHOLDER_FILTER" : "@:APP.FIELD_PLACEHOLDER_FILTER",
  
@@ -1915,11 +1979,12 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "HELP_INPUT_METHOD_OSK"    : "显示并从内建的 Guacamole 屏幕键盘接受输入。屏幕键盘可以输入平常无法输入的按键组合（如 Ctrl-Alt-Del 等）。",
          "HELP_INPUT_METHOD_TEXT"   : "允许输入文本，并根据所输入的文本模拟键盘事件。可用于没有物理键盘的设备，如手机等。",
 +        "HELP_RECOVER_KEYBOARD"    : "无需刷新即可重置并重新捕获键盘和输入法。也可按 Ctrl-Alt-K。",
++        "HELP_REFRESH_PAGE_NOW"    : "重新验证已缓存的前端文件后，完整刷新 Guacamole 页面。远程画面持续黑屏或一直无法打开时可使用。",
 +        "HELP_AUTOMATIC_REFRESH"   : "确认网络或控制失效后，短暂等待并自动刷新整个页面。关闭时请使用右下角的“刷新页面”。整页刷新可能打开不同的后端或远程会话。",
          "HELP_MOUSE_MODE"          : "设置远程电脑上的鼠标对触控行为的反应。",
          "HELP_MOUSE_MODE_ABSOLUTE" : "点击时立即触发按键。在点击的位置触发鼠标按键事件。",
          "HELP_MOUSE_MODE_RELATIVE" : "拖拽时移动鼠标，再点击时触发按键。在鼠标当前所在的位置触发按键事件。",
-@@ -143,9 +149,11 @@
+@@ -143,9 +150,11 @@
          "NAME_KEY_TAB"             : "Tab",
          "NAME_MOUSE_MODE_ABSOLUTE" : "触摸屏",
          "NAME_MOUSE_MODE_RELATIVE" : "触控板",
@@ -1931,7 +1996,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "SECTION_HEADER_DEVICES"         : "设备",
          "SECTION_HEADER_DISPLAY"         : "显示",
          "SECTION_HEADER_FILE_TRANSFERS"  : "文件传输",
-@@ -160,10 +168,13 @@
+@@ -160,10 +169,13 @@
          "TEXT_CLIENT_STATUS_CONNECTING"   : "正在连接 Guacamole...",
          "TEXT_CLIENT_STATUS_DISCONNECTED" : "您的连接已断开。",
          "TEXT_CLIENT_STATUS_UNSTABLE"     : "到 Guacamole 服务器的网络连接似乎不太稳定。",
@@ -1945,7 +2010,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "TEXT_FILE_TRANSFER_PROGRESS"     : "{PROGRESS} {UNIT, select, b{B} kb{KB} mb{MB} gb{GB} other{}}",
  
          "URL_OSK_LAYOUT" : "layouts/en-us-qwerty.json"
-@@ -1011,6 +1022,7 @@
+@@ -1011,6 +1023,7 @@
          "ERROR_PASSWORD_MISMATCH" : "@:APP.ERROR_PASSWORD_MISMATCH",
  
          "FIELD_HEADER_LANGUAGE"           : "界面语言：",
@@ -1953,7 +2018,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "FIELD_HEADER_PASSWORD"           : "密码：",
          "FIELD_HEADER_PASSWORD_OLD"       : "当前密码：",
          "FIELD_HEADER_PASSWORD_NEW"       : "新密码：",
-@@ -1018,6 +1030,7 @@
+@@ -1018,6 +1031,7 @@
          "FIELD_HEADER_TIMEZONE"           : "时区：",
          "FIELD_HEADER_USERNAME"           : "用户名：",
          
@@ -1961,7 +2026,7 @@ diff --git a/guacamole/src/main/frontend/src/translations/zh.json b/guacamole/sr
          "HELP_DEFAULT_INPUT_METHOD" : "默认输入法决定了 Guacamole 如何接收键盘事件。当使用移动设备或使用 IME 输入时，有可能需要更改设置。本设置可在 Guacamole 菜单内被单个连接的设定覆盖。",
          "HELP_DEFAULT_MOUSE_MODE"   : "默认鼠标模拟方式决定了新连接内的远程鼠标如何响应屏幕触控。本设置可在 Guacamole 菜单内被单个连接的设定覆盖。",
          "HELP_INPUT_METHOD_NONE"    : "@:CLIENT.HELP_INPUT_METHOD_NONE",
-@@ -1036,6 +1049,7 @@
+@@ -1036,6 +1050,7 @@
          "NAME_INPUT_METHOD_TEXT" : "@:CLIENT.NAME_INPUT_METHOD_TEXT",
  
          "SECTION_HEADER_DEFAULT_INPUT_METHOD" : "缺省输入法",

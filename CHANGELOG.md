@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0-recovery6
+
+- Revalidate the current document with `Cache-Control: no-cache` before every manual or automatic full-page refresh, then force reload exactly once.
+- Clear Guacamole's built-in stale-build reload lock so upgrades and rollbacks can recover from mixed cached frontend files.
+- Keep timeout/error fallbacks so recovery still reloads when the revalidation request cannot complete.
+- Add an always-available **Refresh page** action to the connection recovery menu and expose the same action while waiting for the first remote frame.
+- Preserve recovery5's opt-in refresh setting, cross-reload loop guard, file-transfer protection, and recovery4 display hot-path optimization.
+- Document that post-login remote-canvas black screens may still require resetting persistent RDP settings or restarting `guacd`.
+
 ## 1.6.0-recovery5
 
 - Add an opt-in browser-local setting for delayed automatic refresh of the entire Guacamole page after confirmed network or control failure; the default is off.

@@ -426,6 +426,26 @@ class ThumbnailUpdateState:
         self.updates.append("disconnected")
 
 
+class CacheRevalidatedRefreshState:
+    """Model one-shot page reload after frontend cache revalidation."""
+
+    def __init__(self) -> None:
+        self.build_reload_lock = True
+        self.revalidation_started = False
+        self.reloads = 0
+        self.finished = False
+
+    def refresh(self) -> None:
+        self.build_reload_lock = False
+        self.revalidation_started = True
+
+    def finish_revalidation(self) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        self.reloads += 1
+
+
 def main() -> None:
     # compositionend missing during tab switch must not permanently block input
     state = TextInputState()
@@ -766,6 +786,17 @@ def main() -> None:
         thumbnails.sync()
     thumbnails.disconnected()
     assert thumbnails.updates == ["connected", "disconnected"]
+
+    # Manual and automatic recovery first clear Guacamole's stale-build lock
+    # and request cache revalidation. Error/timeout/fallback completion may
+    # race, but the actual page reload must occur exactly once.
+    cache_refresh = CacheRevalidatedRefreshState()
+    cache_refresh.refresh()
+    assert cache_refresh.build_reload_lock is False
+    assert cache_refresh.revalidation_started is True
+    cache_refresh.finish_revalidation()
+    cache_refresh.finish_revalidation()
+    assert cache_refresh.reloads == 1
 
     # A confirmed disruption queues one bounded full-page refresh after the
     # initial delay when the opt-in preference is enabled.

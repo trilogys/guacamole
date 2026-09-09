@@ -11,7 +11,7 @@ This repository is not an official Apache Software Foundation release.
 Pull the published image:
 
 ```bash
-docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+docker pull ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ```
 
 Use it in Docker Compose:
@@ -19,7 +19,7 @@ Use it in Docker Compose:
 ```yaml
 services:
   guacamole:
-    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+    image: ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ```
 
 Update only the Guacamole web container:
@@ -35,8 +35,8 @@ Docker reuses unchanged layers, so later pulls normally download only changed la
 
 ## Published image tags
 
-- `1.6.0-recovery5`: current named recovery release documented by this package.
-- `1.6.0-recovery4`: previous recovery release retained for rollback.
+- `1.6.0-recovery6`: current named recovery release documented by this package.
+- `1.6.0-recovery5`: previous recovery release retained for rollback.
 - `1.6.0`: current moving release image; this tag is updated on each release build.
 - `main`: latest image built from the `main` branch.
 - `sha-<commit>`: immutable tag for a specific source commit.
@@ -81,6 +81,12 @@ If the tunnel remains open but three intentional mouse presses receive no timely
 
 A full-page refresh reloads authentication state, routing, and all tiled connections. A balancing group may select another backend and RDP may open a different remote session. Keep the option disabled and use a specific connection when the same host must be preserved.
 
+Recovery6 revalidates the current document with `Cache-Control: no-cache`, clears Guacamole's stale-build refresh lock, and guarantees exactly one reload after request success, failure, or timeout. **Refresh page** is always available in the connection menu and is also shown while waiting for the first remote frame.
+
+### Black remote canvas after login
+
+If Guacamole login and menus work but only the remote canvas is black, first use **Refresh page** in the connection menu. If that fails, restart `guacd` and restore the connection's display settings: leave color depth and DPI empty, and disable force-lossless while leaving **Disable GFX** and all three **disable cache** options unchecked. These settings live in the database and are not reverted with the web image.
+
 ### Mouse response under weak networks
 
 High-frequency mouse movement is coalesced to the latest position at roughly 30 Hz. Button presses, releases, right-clicks, wheel events, and drag endpoints flush the latest position first and are sent immediately, preventing clicks from waiting behind stale movement. Pending movement is discarded when the connection is replaced.
@@ -89,7 +95,7 @@ High-frequency mouse movement is coalesced to the latest position at roughly 30 
 
 Chrome, Edge, video, animation, and complex page scrolling inside remote Windows generate substantial RDP display traffic. The patch detects severe backlog and recovers the connection, but cannot remove bottlenecks in the remote host, network, or `guacd` encoder. For the specific Guacamole RDP connection, prefer:
 
-Recovery5 retains recovery4's display hot-path optimization: the live sync callback no longer flattens the full display every five seconds for thumbnails, and per-frame statistics are disabled by default and enabled with a one-second window only after intentional clicks. Thumbnails are still saved after the first connected frame and on disconnect.
+Recovery6 retains recovery4's display hot-path optimization: the live sync callback no longer flattens the full display every five seconds for thumbnails, and per-frame statistics are disabled by default and enabled with a one-second window only after intentional clicks. Thumbnails are still saved after the first connected frame and on disconnect.
 
 - `16`-bit color depth;
 - force-lossless disabled;
@@ -105,7 +111,7 @@ A successful build publishes:
 
 ```text
 ghcr.io/trilogys/guacamole_patch:1.6.0
-ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5
+ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6
 ghcr.io/trilogys/guacamole_patch:main
 ghcr.io/trilogys/guacamole_patch:sha-<commit>
 ```
@@ -130,7 +136,7 @@ Clone and build:
 git clone https://github.com/trilogys/guacamole_patch.git
 cd guacamole_patch
 
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6" \
 bash ./build.sh
 ```
 
@@ -138,7 +144,7 @@ For a faster troubleshooting build:
 
 ```bash
 MAVEN_ARGUMENTS="-T 1C -Dmaven.test.skip=true" \
-IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5" \
+IMAGE_NAME="ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6" \
 bash ./build.sh
 ```
 
@@ -147,14 +153,14 @@ bash ./build.sh
 ## Verify the image
 
 ```bash
-docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery5 \
+docker image inspect ghcr.io/trilogys/guacamole_patch:1.6.0-recovery6 \
   --format '{{index .Config.Labels "io.guacamole.recovery.patch-sha256"}}'
 ```
 
 Expected patch SHA-256:
 
 ```text
-c25068f2c99a286fa0530477b92600cc2f90438c69b4ba0437266798db86d051
+0345d83616eefb0c23c6c8aad328739260beeb2bf0f0d645fc436d4f87f4de5f
 ```
 
 ## Acceptance testing

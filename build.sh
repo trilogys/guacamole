@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SUPPORTED_VERSION="1.6.0"
 GUACAMOLE_VERSION="${GUACAMOLE_VERSION:-${SUPPORTED_VERSION}}"
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/trilogys/guacamole_patch:${GUACAMOLE_VERSION}-recovery5}"
+IMAGE_NAME="${IMAGE_NAME:-ghcr.io/trilogys/guacamole_patch:${GUACAMOLE_VERSION}-recovery6}"
 MAVEN_ARGUMENTS="${MAVEN_ARGUMENTS:--DskipTests=false}"
 PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
@@ -18,7 +18,7 @@ if [[ "${GUACAMOLE_VERSION}" != "${SUPPORTED_VERSION}" ]]; then
     exit 1
 fi
 
-for command in curl sha256sum tar patch docker python3 mktemp; do
+for command in curl grep sha256sum tar patch docker python3 mktemp; do
     if ! command -v "${command}" >/dev/null 2>&1; then
         printf '缺少命令：%s\n' "${command}" >&2
         exit 1
@@ -44,8 +44,13 @@ BUILD_WORK_DIR="$(mktemp -d "${WORK_PARENT%/}/guacamole-ime-fix.XXXXXX")"
 ARCHIVE="${BUILD_WORK_DIR}/guacamole-client-${GUACAMOLE_VERSION}.tar.gz"
 SOURCE_DIR="${BUILD_WORK_DIR}/guacamole-client-${GUACAMOLE_VERSION}"
 PATCH_SHA256="$(sha256sum "${PATCH_FILE}" | awk '{print $1}')"
+WEB_SMOKE_CONTAINER=""
 
 cleanup() {
+    if [[ -n "${WEB_SMOKE_CONTAINER}" ]]; then
+        docker rm --force "${WEB_SMOKE_CONTAINER}" >/dev/null 2>&1 || true
+    fi
+
     if [[ "${KEEP_WORK_DIR}" == "true" ]]; then
         printf '保留构建目录：%s\n' "${BUILD_WORK_DIR}"
     else
@@ -112,7 +117,7 @@ fi
 DOCKER_BUILD_ARGS=(
     --build-arg "MAVEN_ARGUMENTS=${MAVEN_ARGUMENTS}"
     --label "org.opencontainers.image.title=Apache Guacamole with input and network recovery"
-    --label "org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery5"
+    --label "org.opencontainers.image.version=${GUACAMOLE_VERSION}-recovery6"
     --label "org.opencontainers.image.source=https://github.com/apache/guacamole-client"
     --label "org.opencontainers.image.licenses=Apache-2.0"
     --label "io.guacamole.recovery.patch-sha256=${PATCH_SHA256}"
@@ -129,6 +134,38 @@ docker image inspect "${IMAGE_NAME}" >/dev/null
 printf '执行镜像内 initdb 冒烟测试……\n'
 docker run --rm --entrypoint /opt/guacamole/bin/initdb.sh \
     "${IMAGE_NAME}" --postgresql >/dev/null
+
+printf '执行 Guacamole Web 启动与首页资源冒烟测试……\n'
+WEB_SMOKE_CONTAINER="guacamole-web-smoke-${RANDOM}-$$"
+docker run --detach --name "${WEB_SMOKE_CONTAINER}" \
+    --publish 127.0.0.1::8080 \
+    --env GUACD_HOSTNAME=127.0.0.1 \
+    "${IMAGE_NAME}" >/dev/null
+
+WEB_SMOKE_PORT="$(docker port "${WEB_SMOKE_CONTAINER}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
+WEB_SMOKE_OK=false
+for attempt in {1..30}; do
+    if curl --fail --silent --show-error --location \
+            "http://127.0.0.1:${WEB_SMOKE_PORT}/guacamole/" \
+            | grep --quiet '<meta name="build"'; then
+        WEB_SMOKE_OK=true
+        break
+    fi
+
+    if [[ "$(docker inspect --format '{{.State.Running}}' "${WEB_SMOKE_CONTAINER}")" != "true" ]]; then
+        break
+    fi
+    sleep 2
+done
+
+if [[ "${WEB_SMOKE_OK}" != "true" ]]; then
+    docker logs "${WEB_SMOKE_CONTAINER}" >&2 || true
+    printf 'Guacamole Web 容器未能返回有效首页，停止发布。\n' >&2
+    exit 1
+fi
+
+docker rm --force "${WEB_SMOKE_CONTAINER}" >/dev/null
+WEB_SMOKE_CONTAINER=""
 
 IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${IMAGE_NAME}")"
 printf '\n构建完成：%s\n' "${IMAGE_NAME}"
